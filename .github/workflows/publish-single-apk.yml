@@ -91,11 +91,13 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
-
-      - name: Install Android build tools
+      - name: Install Android build tools (SDK is preinstalled on the runner)
         run: |
-          sdkmanager --install "build-tools;35.0.1"
+          set -euo pipefail
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$sdkmanager" ] || { echo "::error::sdkmanager not found in the runner image"; exit 1; }
+          yes | "$sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$sdkmanager" --install "build-tools;35.0.1" >/dev/null
           echo "$ANDROID_HOME/build-tools/35.0.1" >> "$GITHUB_PATH"
 
       - name: Download previously signed split archive
