@@ -6,10 +6,10 @@ import zipfile
 
 def verify(before: str, after: str) -> None:
     with zipfile.ZipFile(before) as source, zipfile.ZipFile(after) as result:
-        old = {n: source.read(n) for n in source.namelist()
+        old = {n for n in source.namelist()
                if not n.endswith("/") and not n.startswith("META-INF/")}
         new = set(result.namelist())
-        missing = set(old) - new - {"AndroidManifest.xml"}
+        missing = old - new - {"AndroidManifest.xml"}
         if missing:
             raise ValueError("repack dropped entries: " + ", ".join(sorted(missing)[:15]))
         important = [n for n in old if n.endswith(".dex") or n.startswith("lib/")
