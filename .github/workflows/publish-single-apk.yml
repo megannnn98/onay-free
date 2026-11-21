@@ -1,0 +1,129 @@
+name: Publish single APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "New release tag (for example v0.0.2)"
+        required: true
+        default: "v0.0.2"
+        type: string
+      source_tag:
+        description: "Existing release with the signed .apks archive"
+        required: true
+        default: "v0.0.1"
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: single-apk-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Require existing signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ONAY_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ONAY_KS_PASS }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::Configure repository secrets ONAY_KEYSTORE_B64 and ONAY_KS_PASS before publishing."
+            exit 1
+          fi
+
+      - name: Check release tag and target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Invalid release tag"; exit 1; }
+          [ "$TAG" != "$SOURCE_TAG" ] || { echo "::error::Target and source tags must differ"; exit 1; }
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists; refusing to overwrite it"
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        run: |
+          sdkmanager --install "build-tools;35.0.1"
+          echo "$ANDROID_HOME/build-tools/35.0.1" >> "$GITHUB_PATH"
+
+      - name: Run offline packaging tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Download previously signed split archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/input
+          gh release download "$SOURCE_TAG" --pattern '*.apks' --dir work/input
+          archives=(work/input/*.apks)
+          [ "${#archives[@]}" -eq 1 ] || {
+            echo "::error::Expected exactly one .apks archive in source release"
+            exit 1
+          }
+
+      - name: Rebuild and sign one APK
+        env:
+          KEYSTORE_B64: ${{ secrets.ONAY_KEYSTORE_B64 }}
+          ONAY_KS_PASS: ${{ secrets.ONAY_KS_PASS }}
+          ONAY_KS_ALIAS: ${{ secrets.ONAY_KS_ALIAS }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/onay"
+          # The keystore is never stored in the repository or uploaded as an artifact.
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/onay/signing.jks"
+          unset KEYSTORE_B64
+          chmod 600 "$RUNNER_TEMP/onay/signing.jks"
+          ONAY_KS="$RUNNER_TEMP/onay/signing.jks" \
+          SPLITS_INPUT="work/input/onay-free-0.0.1.apks" \
+          OUTPUT_APK="work/release/onay-free-${TAG#v}.apk" \
+          bash scripts/build_universal_apk.sh
+
+      - name: Verify certificate matches original release
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          unzip -p work/input/onay-free-0.0.1.apks base.apk > "$RUNNER_TEMP/onay/base.apk"
+          src="$(apksigner verify --print-certs "$RUNNER_TEMP/onay/base.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+          new="$(apksigner verify --print-certs "work/release/onay-free-${TAG#v}.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+          if [ -z "$src" ] || [ "$src" != "$new" ]; then
+            echo "::error::Signing certificate differs from original release"
+            exit 1
+          fi
+          sha256sum "work/release/onay-free-${TAG#v}.apk"
+
+      - name: Create release and upload APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" "work/release/onay-free-${TAG#v}.apk" \
+            --target "$GITHUB_SHA" \
+            --title "onay-free ${TAG#v} (single APK)" \
+            --notes "One ARM64 APK, install directly on Android. Repacked from $SOURCE_TAG; no application code changes. Original ONAY! from Google Play has a different signature and must be uninstalled. Real-device smoke test is still required." \
+            --prerelease
