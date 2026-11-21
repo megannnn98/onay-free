@@ -9,7 +9,10 @@
 |---|---|---|---|
 | 1 | Новый dex `classes12.dex` (34 класса: `kz.onay.nearby.logic.*`, `kz.onay.nearby.ui.*`) | добавляется в `base.apk` скриптом `scripts/add_dex.py` | код экрана «Рядом» и логики |
 | 2 | **Smali**: в `MainActivity.Q0(int)` ветка вкладки 2 (Life) вызывает `NearbyStopFragment.newInstance(null)` вместо `LifeFragment.newInstance()` | `smali_classes11/kz/onay/ui/main/MainActivity.smali`, `scripts/patch_smali.py` | экран «Рядом» открывается на вкладке Life; раздел купонов и партнёров Kwaaka не открывается из навигации (код Life и Kwaaka не удалён) |
-| 3 | Отладочная Activity `kz.onay.nearby.ui.NearbyStopDebugActivity` (`exported="true"`) | `AndroidManifest.xml`, `scripts/patch_manifest.py` | **только отладочная сборка** (`ONAY_DEBUG_ACTIVITY=1`): запуск через adb с тестовыми данными и подменой координаты. В релизной сборке отсутствует (проверено по манифесту) |
+| 3 | **Smali**: `FeatureCheckerImpl.isFeatureEnabled(String)` возвращает `false` для рекламных флагов Firebase Remote Config: `isYandexAdsEnabled`, `isRoutesNativeInterstitialAdsEnabled`, `partnerTilesMainScreenEnabled`, `partnerTilesMyTicketsEnabled` | `smali_classes11/kz/onay/firebase/feature_checker/FeatureCheckerImpl.smali`, `scripts/patch_ads.py` | экраны, проверяющие эти флаги (оплата проезда, транспортная карта и схема, всплывающая реклама на экране маршрутов, партнёрские плитки на главной и в билетах), не создают рекламные блоки. Функциональные флаги (такси, метро, биометрия и т. д.) не затронуты |
+| 4 | **Smali**: пустые тела (`return-void`) методов `loadAd` у `NativeAdLoader` (2 варианта), `BannerAdView` (1) и `SliderAdLoader` (2) из SDK Yandex Ads | `smali_classes9/com/yandex/mobile/ads/...`, `scripts/patch_ads.py` | объявление не запрашивается и не показывается нигде, где приложение вызывает эти загрузчики: карусель на Cards, нативные блоки, статус оплаты, баннеры. Слушатели загрузки не вызываются |
+| 5 | **Разметка**: `android:visibility="gone"` у контейнеров баннеров: `compose_view_banner` (экран Cards), `yandexBannerView` (панель фирменных остановок), `composeViewBanner` (панель партнёрских точек) | `res/layout/fragment_profile_main_cards.xml`, `bottom_sheet_branded_stops.xml`, `bottom_sheet_poi.xml`, `scripts/patch_layout.py` | нет пустых мест на месте рекламы |
+| 6 | Отладочная Activity `kz.onay.nearby.ui.NearbyStopDebugActivity` (`exported="true"`) | `AndroidManifest.xml`, `scripts/patch_manifest.py` | **только отладочная сборка** (`ONAY_DEBUG_ACTIVITY=1`): запуск через adb с тестовыми данными и подменой координаты. В релизной сборке отсутствует (проверено по манифесту) |
 
 Правка 2 в smali: заменена одна инструкция вызова
 ```
@@ -19,7 +22,7 @@
 ```
 (регистр `v0` в этой ветке свободен, у метода `.locals 1`). Скрипт останавливает сборку, если вызов не найден ровно один раз внутри `Q0(I)` или файл уже изменён.
 
-Вкладки Routes (оригинальный экран транспорта), Cards, Menu, а также оплата, авторизация, купоны (код), профиль не менялись. Ресурсы и разметка не менялись.
+Вкладки Routes (оригинальный экран транспорта), Cards (кроме убранного баннера), Menu, а также оплата, авторизация, купоны (код), профиль не менялись. Раздел «Discounts» (льготы) не менялся: это функция приложения, а не реклама.
 
 Нижняя навигация и круглая кнопка QR главного экрана заходят на контейнер фрагмента, поэтому в `MainActivity` экран имеет нижний отступ 44 dp (в отладочной Activity его нет).
 
