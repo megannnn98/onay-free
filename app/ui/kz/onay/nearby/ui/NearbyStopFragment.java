@@ -137,6 +137,7 @@ public class NearbyStopFragment extends Fragment {
     private String forcedState;
     private boolean permissionAsked;
     private boolean recheckOnResume;
+    private static boolean routesTabOpenedForStops;
 
     private NearbyDataSource data;
     private List<StopPoint> allStops = Collections.emptyList();
@@ -482,7 +483,9 @@ public class NearbyStopFragment extends Fragment {
         data = src;
         allStops = stops;
         if (stops.isEmpty()) {
-            showStatus("Остановки ещё не загружены. Откройте обычную карту транспорта и повторите.", "Повторить", this::start);
+            showStatus("Остановки ещё не загружены. Открываем карту транспорта (Routes): после загрузки вернитесь на «Рядом».",
+                    "Повторить", this::start);
+            openRoutesTabOnce();
             return;
         }
         locate();
@@ -979,11 +982,13 @@ public class NearbyStopFragment extends Fragment {
      * Routes often share a street. Lines get different widths (the first route is the widest and lies at the
      * bottom), so the colours of all routes stay visible side by side instead of the top one hiding the rest.
      */
-    private int lineWidthOf(long routeId, boolean selected) {
+    private int lineWidthOf(long routeId) {
         Integer idx = colorIndex.get(routeId);
         int n = Math.max(1, routes.size());
-        int base = dp(4) + ((n - 1) - (idx == null ? 0 : idx)) * dp(3);
-        return selected ? dp(4) + (n - 1) * dp(3) + dp(3) : base;
+        if (highlight.hasSelection()) {
+            return dp(4); // a selected route keeps the standard width; the others are only dimmed
+        }
+        return dp(4) + ((n - 1) - (idx == null ? 0 : idx)) * dp(3);
     }
 
     private float lineZOf(long routeId) {
@@ -1011,7 +1016,7 @@ public class NearbyStopFragment extends Fragment {
             if (pl != null) {
                 for (Polyline p : pl) {
                     p.setColor(withAlpha(colorOf(id), alpha));
-                    p.setWidth(lineWidthOf(id, sel));
+                    p.setWidth(lineWidthOf(id));
                     p.setZIndex(sel ? 3f : lineZOf(id));
                 }
             }
@@ -1145,7 +1150,7 @@ public class NearbyStopFragment extends Fragment {
                 if (!servesStop || !line.isDrawable()) {
                     continue;
                 }
-                PolylineOptions po = new PolylineOptions().color(color).width(lineWidthOf(id, false)).geodesic(false)
+                PolylineOptions po = new PolylineOptions().color(color).width(lineWidthOf(id)).geodesic(false)
                         .zIndex(lineZOf(id));
                 for (int i = 0; i < line.size(); i++) {
                     po.add(new LatLng(line.getLat(i), line.getLng(i)));
@@ -1782,6 +1787,33 @@ public class NearbyStopFragment extends Fragment {
         }
         // The round QR button reaches above the container when the bar is shown.
         rootView.setPadding(0, 0, 0, originalNavigationShown ? dp(44) : 0);
+    }
+
+    /**
+     * The app fills its stop database when the original transport map is opened. On the very first start the
+     * database is empty, so this opens that map once per process (clicking the app's own Routes tab). The tab bar is
+     * shown for the trip and hidden again when this screen comes back.
+     */
+    private void openRoutesTabOnce() {
+        if (routesTabOpenedForStops || testMode || rootView == null) {
+            return;
+        }
+        Context c = requireContext();
+        int id = c.getResources().getIdentifier("nav_routes", "id", c.getPackageName());
+        View tab = id == 0 ? null : requireActivity().findViewById(id);
+        if (tab == null) {
+            return;
+        }
+        routesTabOpenedForStops = true;
+        recheckOnResume = true; // when the user returns, look for stops again
+        for (String name : ORIGINAL_NAVIGATION_IDS) {
+            int viewId = c.getResources().getIdentifier(name, "id", c.getPackageName());
+            View v = viewId == 0 ? null : requireActivity().findViewById(viewId);
+            if (v != null) {
+                v.setVisibility(View.VISIBLE);
+            }
+        }
+        tab.performClick();
     }
 
     private void toggleExpandedChips() {
