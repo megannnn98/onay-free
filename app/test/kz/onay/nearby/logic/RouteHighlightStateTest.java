@@ -77,4 +77,15 @@ class RouteHighlightStateTest {
         s.retainOnly(java.util.Arrays.asList(1L, 2L));
         assertEquals(Long.valueOf(2L), s.getSelectedRouteId());
     }
+
+    @Test
+    void onlyTheSelectedRouteLineIsVisible() {
+        RouteHighlightState s = new RouteHighlightState();
+        assertFalse(s.isLineVisible(1L));
+        s.toggle(1L);
+        assertTrue(s.isLineVisible(1L));
+        assertFalse(s.isLineVisible(2L));
+        s.toggle(1L);
+        assertFalse(s.isLineVisible(1L));
+    }
 }
