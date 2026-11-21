@@ -6,6 +6,9 @@ space is left behind. Each start tag must be found exactly once per layout file,
   fragment_profile_main_cards.xml  compose_view_banner  promo carousel on the cards screen
   bottom_sheet_branded_stops.xml   yandexBannerView     Yandex banner in the branded stops sheet
   bottom_sheet_poi.xml             composeViewBanner    partner banner in the partner point sheet
+  activity_main.xml                nav_* , QR, shadow   the bottom navigation bar and the round QR button: the app
+                                                        opens on the map. Nothing is removed: the "..." button of the
+                                                        new screen shows the bar again (payment stays reachable).
 """
 import glob
 import os
@@ -16,6 +19,15 @@ TARGETS = (
     ("fragment_profile_main_cards.xml", "compose_view_banner"),
     ("bottom_sheet_branded_stops.xml", "yandexBannerView"),
     ("bottom_sheet_poi.xml", "composeViewBanner"),
+    ("activity_main.xml", "nav_routes"),
+    ("activity_main.xml", "nav_profile"),
+    ("activity_main.xml", "nav_life"),
+    ("activity_main.xml", "nav_life_hint"),
+    ("activity_main.xml", "nav_settings"),
+    ("activity_main.xml", "nav_image_qr"),
+    ("activity_main.xml", "nav_qr"),
+    ("activity_main.xml", "viewShadow"),
+    ("activity_main.xml", "viewBottomBorder"),
 )
 
 
