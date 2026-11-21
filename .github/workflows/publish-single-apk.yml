@@ -1,6 +1,12 @@
 name: Publish single APK
 
 on:
+  push:
+    branches: [master]
+    paths:
+      - "scripts/build_universal_apk.sh"
+      - "tests/test_build_universal_apk.py"
+      - ".github/workflows/publish-single-apk.yml"
   workflow_dispatch:
     inputs:
       tag:
@@ -22,7 +28,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run offline packaging tests
+        run: python3 -m unittest discover -s tests -v
+
   publish:
+    needs: checks
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -66,9 +81,6 @@ jobs:
           sdkmanager --install "build-tools;35.0.1"
           echo "$ANDROID_HOME/build-tools/35.0.1" >> "$GITHUB_PATH"
 
-      - name: Run offline packaging tests
-        run: python3 -m unittest discover -s tests -v
-
       - name: Download previously signed split archive
         env:
           GH_TOKEN: ${{ github.token }}
@@ -77,11 +89,12 @@ jobs:
           set -euo pipefail
           mkdir -p work/input
           gh release download "$SOURCE_TAG" --pattern '*.apks' --dir work/input
-          archives=(work/input/*.apks)
+          mapfile -t archives < <(find work/input -maxdepth 1 -type f -name '*.apks' -print)
           [ "${#archives[@]}" -eq 1 ] || {
             echo "::error::Expected exactly one .apks archive in source release"
             exit 1
           }
+          echo "SPLITS_ARCHIVE=${archives[0]}" >> "$GITHUB_ENV"
 
       - name: Rebuild and sign one APK
         env:
@@ -97,7 +110,7 @@ jobs:
           unset KEYSTORE_B64
           chmod 600 "$RUNNER_TEMP/onay/signing.jks"
           ONAY_KS="$RUNNER_TEMP/onay/signing.jks" \
-          SPLITS_INPUT="work/input/onay-free-0.0.1.apks" \
+          SPLITS_INPUT="$SPLITS_ARCHIVE" \
           OUTPUT_APK="work/release/onay-free-${TAG#v}.apk" \
           bash scripts/build_universal_apk.sh
 
@@ -106,7 +119,7 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          unzip -p work/input/onay-free-0.0.1.apks base.apk > "$RUNNER_TEMP/onay/base.apk"
+          unzip -p "$SPLITS_ARCHIVE" base.apk > "$RUNNER_TEMP/onay/base.apk"
           src="$(apksigner verify --print-certs "$RUNNER_TEMP/onay/base.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
           new="$(apksigner verify --print-certs "work/release/onay-free-${TAG#v}.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
           if [ -z "$src" ] || [ "$src" != "$new" ]; then
