@@ -5,7 +5,7 @@
 Неофициальная модификация приложения ONAY! (`kz.onay` 3.6.5):
 экран «Рядом» с ближайшей остановкой и транспортом на карте, без рекламы.
 
-<img src="docs/screenshot-life-nearby.png" alt="Вкладка Life: экран «Рядом»" width="280">
+<img src="docs/screenshot-nearby.png" alt="Экран «Рядом» (тестовые данные, эмулятор)" width="280">
 
 </div>
 
