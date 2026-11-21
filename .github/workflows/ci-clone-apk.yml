@@ -6,6 +6,7 @@ on:
       - "scripts/build_universal_apk.sh"
       - "scripts/patch_clone_manifest.py"
       - "scripts/verify_clone_payload.py"
+      - "scripts/replace_compiled_manifest.py"
       - "scripts/verify_universal_apk.sh"
       - ".github/workflows/ci-clone-apk.yml"
   workflow_dispatch:
