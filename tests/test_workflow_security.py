@@ -4,6 +4,7 @@ These read the workflow text; they cannot prove what GitHub does at run time, bu
 mistakes (echoing a secret, uploading the keystore, publishing during a dry run).
 Run with: python3 -m unittest discover -s tests -v
 """
+import os
 from pathlib import Path
 import re
 import shutil
@@ -58,7 +59,7 @@ class WorkflowSecurityTest(unittest.TestCase):
         self.assertIn('unset KEYSTORE_B64', WORKFLOW)
 
     def test_only_the_apk_is_uploaded_as_an_artifact(self):
-        uploads = re.findall(r'uses: actions/upload-artifact@v4.*?(?=\n      - |\Z)', WORKFLOW, re.S)
+        uploads = re.findall(r'uses: actions/upload-artifact@[0-9a-f]{40}.*?(?=\n      - |\Z)', WORKFLOW, re.S)
         self.assertEqual(len(uploads), 1)
         text = uploads[0]
         self.assertIn('path: ${{ env.APK_PATH }}', text)
@@ -68,7 +69,7 @@ class WorkflowSecurityTest(unittest.TestCase):
         self.assertLessEqual(days, 7)
 
     def test_checkout_does_not_persist_credentials_in_publish_job(self):
-        self.assertRegex(publish_job_text(), r'uses: actions/checkout@v4\s+with:\s+persist-credentials: false')
+        self.assertRegex(publish_job_text(), r'uses: actions/checkout@[0-9a-f]{40}[^\n]*\s+with:\s+persist-credentials: false')
 
     def test_signing_key_is_removed_even_when_a_step_fails(self):
         text = step('Remove the signing key from the runner')
@@ -112,6 +113,32 @@ class WorkflowSecurityTest(unittest.TestCase):
         for name in tracked:
             self.assertFalse(re.search(r'\.(jks|keystore|p12|pfx|pem)$', name), name)
             self.assertFalse(name.startswith('work/'), name)
+
+
+class AllWorkflowsPinned(unittest.TestCase):
+    """Third-party actions are pinned to a full commit SHA, so a moved tag cannot change what runs."""
+
+    def workflows(self):
+        import glob
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml")))
+
+    def test_every_action_is_pinned_to_a_commit_sha(self):
+        for path in self.workflows():
+            with open(path, encoding="utf-8") as f:
+                for n, line in enumerate(f, 1):
+                    m = re.search(r"uses:\s*(\S+)", line)
+                    if m and not m.group(1).startswith("./"):
+                        self.assertRegex(m.group(1), r"@[0-9a-f]{40}$", "%s:%d is not pinned: %s" % (path, n, line.strip()))
+
+    def test_ci_workflow_is_read_only_and_checks_on_pull_requests(self):
+        for path in self.workflows():
+            if path.endswith("ci.yml"):
+                text = open(path, encoding="utf-8").read()
+                self.assertIn("pull_request:", text)
+                self.assertRegex(text, r"permissions:\s+contents: read")
+                self.assertNotIn("secrets.", text)
+                self.assertNotIn("contents: write", text)
 
 
 if __name__ == '__main__':
