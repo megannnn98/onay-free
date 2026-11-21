@@ -51,6 +51,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -67,6 +69,8 @@ import kz.onay.nearby.logic.RouteLine;
 import kz.onay.nearby.logic.RoutesAtStopSelector;
 import kz.onay.nearby.logic.StopMatch;
 import kz.onay.nearby.logic.StopPoint;
+import kz.onay.nearby.logic.VehicleFilter;
+import kz.onay.nearby.logic.VehiclePosition;
 import kz.onay.ui.routes2.shared.MyLocationRequestHelper;
 
 /**
@@ -89,6 +93,9 @@ public class NearbyStopFragment extends Fragment {
     private static final double ALTERNATIVE_EXTRA_METERS = 120.0;
     private static final int ALTERNATIVE_LIMIT = 3;
     private static final int PICK_LIMIT = 80;
+    private static final long VEHICLE_POLL_MS = 5_000L;
+    private static final long VEHICLE_MAX_AGE_SEC = 180L;
+    private static final int VEHICLE_FAILURES_BEFORE_NOTE = 3;
     private static final double OVERVIEW_LAT_SPAN = 0.0030; // about 330 m
     private static final double OVERVIEW_LNG_SPAN = 0.0040; // about 330 m at this latitude
     private static final long LOCATION_TIMEOUT_MS = 15_000L;
@@ -107,6 +114,8 @@ public class NearbyStopFragment extends Fragment {
     private final Map<Long, Integer> colorIndex = new HashMap<>();
     private final Map<Marker, StopPoint> pickMarkers = new HashMap<>();
     private final Map<Long, List<RouteLine>> shownLines = new HashMap<>();
+    private final Map<Long, VehicleMarker> vehicleMarkers = new HashMap<>();
+    private final Map<String, BitmapDescriptor> vehicleIcons = new HashMap<>();
 
     private ExecutorService executor;
     private int generation;
@@ -135,6 +144,11 @@ public class NearbyStopFragment extends Fragment {
     private HorizontalScrollView chipScroll;
     private LinearLayout chipRow;
     private TextView directionView;
+    private TextView vehicleNote;
+    private boolean vehiclePolling;
+    private boolean vehicleRequestInFlight;
+    private int vehicleFailures;
+    private List<VehiclePosition> shownVehicles = Collections.emptyList();
     private TextView pickHint;
     private Button changeStopButton;
     private MapView mapView;
@@ -147,6 +161,19 @@ public class NearbyStopFragment extends Fragment {
     private double selectedDistance = -1;
     private List<StopMatch> candidates = Collections.emptyList();
     private List<RouteAtStop> routes = Collections.emptyList();
+
+    /** A vehicle on the map together with what is needed to restyle it when the selection changes. */
+    private static final class VehicleMarker {
+        final Marker marker;
+        final long routeId;
+        final int bucket;
+
+        VehicleMarker(Marker marker, long routeId, int bucket) {
+            this.marker = marker;
+            this.routeId = routeId;
+            this.bucket = bucket;
+        }
+    }
 
     public static NearbyStopFragment newInstance(@Nullable Bundle args) {
         NearbyStopFragment f = new NearbyStopFragment();
@@ -221,8 +248,11 @@ public class NearbyStopFragment extends Fragment {
         root.addView(chipScroll);
 
         directionView = text(c, 14, false, 0xFF424242);
-        directionView.setPadding(dp(16), dp(2), dp(16), dp(6));
+        directionView.setPadding(dp(16), dp(2), dp(16), dp(2));
         root.addView(directionView);
+        vehicleNote = text(c, 12, false, 0xFF757575);
+        vehicleNote.setPadding(dp(16), 0, dp(16), dp(6));
+        root.addView(vehicleNote);
 
         FrameLayout mapFrame = new FrameLayout(c);
         mapView = new MapView(c);
@@ -520,6 +550,8 @@ public class NearbyStopFragment extends Fragment {
 
     /** Shows the stop at once and loads its routes in the background. */
     private void showStop(StopPoint stop, double distanceMeters) {
+        stopVehiclePolling();
+        clearVehicles();
         selectedStop = stop;
         selectedDistance = distanceMeters;
         routes = Collections.emptyList();
@@ -594,6 +626,7 @@ public class NearbyStopFragment extends Fragment {
         buildChips();
         drawStop();
         refreshHighlight(false);
+        startVehiclePolling();
     }
 
     private void onRoutesFailed(StopPoint stop, boolean loginRequired) {
@@ -705,6 +738,11 @@ public class NearbyStopFragment extends Fragment {
                 }
             }
         }
+        for (VehicleMarker vm : vehicleMarkers.values()) {
+            boolean sel = highlight.isSelected(vm.routeId);
+            vm.marker.setAlpha(highlight.alphaFor(vm.routeId));
+            vm.marker.setZIndex(sel ? 8f : 7f);
+        }
         updateDirectionText();
         if (moveCamera) {
             fitCamera(highlight.getSelectedRouteId());
@@ -794,6 +832,7 @@ public class NearbyStopFragment extends Fragment {
         arrows.clear();
         shownLines.clear();
         pickMarkers.clear();
+        vehicleMarkers.clear();
         addUserMarker();
         map.addMarker(new MarkerOptions().position(new LatLng(selectedStop.getLat(), selectedStop.getLng()))
                 .title(data.getStopName(selectedStop.getId())).zIndex(6f));
@@ -830,6 +869,7 @@ public class NearbyStopFragment extends Fragment {
             arrows.put(id, ms);
             shownLines.put(id, used);
         }
+        renderVehicles(shownVehicles);
         fitCamera(null);
     }
 
@@ -900,6 +940,182 @@ public class NearbyStopFragment extends Fragment {
         return bmp;
     }
 
+    // ---------- vehicles in real time ----------
+
+    private void startVehiclePolling() {
+        if (vehiclePolling || routes.isEmpty() || data == null || mapView == null) {
+            return;
+        }
+        vehiclePolling = true;
+        vehicleFailures = 0;
+        handler.post(vehicleTick);
+    }
+
+    private void stopVehiclePolling() {
+        vehiclePolling = false;
+        handler.removeCallbacks(vehicleTick);
+    }
+
+    private final Runnable vehicleTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!vehiclePolling) {
+                return;
+            }
+            fetchVehicles();
+            handler.postDelayed(this, VEHICLE_POLL_MS);
+        }
+    };
+
+    private void fetchVehicles() {
+        if (vehicleRequestInFlight || selectedStop == null || executor == null) {
+            return;
+        }
+        vehicleRequestInFlight = true;
+        final int gen = generation;
+        final long stopId = selectedStop.getId();
+        final NearbyDataSource src = data;
+        final List<Long> ids = new ArrayList<>();
+        for (RouteAtStop r : routes) {
+            ids.add(r.getRouteId());
+        }
+        executor.execute(() -> {
+            List<VehiclePosition> all = null;
+            try {
+                all = src.loadVehicles(ids);
+            } catch (Exception e) {
+                Log.w(TAG, "vehicles not loaded: " + e);
+            }
+            final List<VehiclePosition> result = all;
+            handler.post(() -> {
+                vehicleRequestInFlight = false;
+                if (gen != generation || mapView == null || !vehiclePolling
+                        || selectedStop == null || selectedStop.getId() != stopId) {
+                    return;
+                }
+                if (result == null) {
+                    vehicleFailures++;
+                    if (vehicleFailures >= VEHICLE_FAILURES_BEFORE_NOTE) {
+                        vehicleNote.setText("Позиции транспорта недоступны, линии маршрутов показаны");
+                    }
+                    return;
+                }
+                vehicleFailures = 0;
+                applyVehicles(result);
+            });
+        });
+    }
+
+    private void applyVehicles(List<VehiclePosition> reported) {
+        List<VehiclePosition> shown = VehicleFilter.select(reported, routes,
+                System.currentTimeMillis() / 1000, VEHICLE_MAX_AGE_SEC);
+        shownVehicles = shown;
+        renderVehicles(shown);
+        String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
+        vehicleNote.setText(shown.isEmpty()
+                ? "Транспорта на этих маршрутах сейчас нет данных · " + time
+                : "Транспорт на карте: " + shown.size() + " · обновлено " + time);
+    }
+
+    /** Moves existing markers, adds new ones and removes those that left; never rebuilds all of them. */
+    private void renderVehicles(List<VehiclePosition> shown) {
+        if (map == null) {
+            return;
+        }
+        Map<Long, VehiclePosition> byDevice = new HashMap<>();
+        for (VehiclePosition p : shown) {
+            byDevice.put(p.getDeviceId(), p);
+        }
+        java.util.Iterator<Map.Entry<Long, VehicleMarker>> it = vehicleMarkers.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<Long, VehicleMarker> e = it.next();
+            if (!byDevice.containsKey(e.getKey())) {
+                e.getValue().marker.remove();
+                it.remove();
+            }
+        }
+        for (VehiclePosition p : shown) {
+            String name = routeName(p.getRouteId());
+            int bucket = (int) Math.round(((p.getBearing() % 360 + 360) % 360) / 22.5) % 16;
+            LatLng at = new LatLng(p.getLat(), p.getLng());
+            VehicleMarker vm = vehicleMarkers.get(p.getDeviceId());
+            if (vm != null && vm.bucket == bucket && vm.routeId == p.getRouteId()) {
+                vm.marker.setPosition(at);
+                continue;
+            }
+            if (vm != null) {
+                vm.marker.remove();
+            }
+            Marker m = map.addMarker(new MarkerOptions().position(at).title("Маршрут " + name)
+                    .icon(vehicleIcon(name, colorOf(p.getRouteId()), bucket)).anchor(0.5f, 0.5f).flat(true)
+                    .alpha(highlight.alphaFor(p.getRouteId()))
+                    .zIndex(highlight.isSelected(p.getRouteId()) ? 8f : 7f));
+            vehicleMarkers.put(p.getDeviceId(), new VehicleMarker(m, p.getRouteId(), bucket));
+        }
+    }
+
+    private void clearVehicles() {
+        for (VehicleMarker vm : vehicleMarkers.values()) {
+            vm.marker.remove();
+        }
+        vehicleMarkers.clear();
+        shownVehicles = Collections.emptyList();
+        vehicleNote.setText("");
+    }
+
+    private String routeName(long routeId) {
+        for (RouteAtStop r : routes) {
+            if (r.getRouteId() == routeId) {
+                return r.getName();
+            }
+        }
+        return String.valueOf(routeId);
+    }
+
+    private BitmapDescriptor vehicleIcon(String label, int color, int bucket) {
+        String key = label + "/" + color + "/" + bucket;
+        BitmapDescriptor icon = vehicleIcons.get(key);
+        if (icon == null) {
+            icon = BitmapDescriptorFactory.fromBitmap(vehicleBitmap(label, color, bucket));
+            vehicleIcons.put(key, icon);
+        }
+        return icon;
+    }
+
+    /** A coloured disc with the route number and a small pointer toward the direction of travel. */
+    private Bitmap vehicleBitmap(String label, int color, int bucket) {
+        int size = dp(44);
+        float c = size / 2f;
+        float r = dp(14);
+        Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas cv = new Canvas(bmp);
+        Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        fill.setColor(color);
+        Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
+        ring.setStyle(Paint.Style.STROKE);
+        ring.setColor(Color.WHITE);
+        ring.setStrokeWidth(dp(2));
+        cv.save();
+        cv.rotate(bucket * 22.5f, c, c);
+        Path tip = new Path();
+        tip.moveTo(c, c - r - dp(10));
+        tip.lineTo(c + dp(6), c - r + dp(2));
+        tip.lineTo(c - dp(6), c - r + dp(2));
+        tip.close();
+        cv.drawPath(tip, fill);
+        cv.drawPath(tip, ring);
+        cv.restore();
+        cv.drawCircle(c, c, r, fill);
+        cv.drawCircle(c, c, r, ring);
+        Paint txt = new Paint(Paint.ANTI_ALIAS_FLAG);
+        txt.setColor(Color.WHITE);
+        txt.setTypeface(Typeface.DEFAULT_BOLD);
+        txt.setTextAlign(Paint.Align.CENTER);
+        txt.setTextSize(label.length() > 2 ? dp(11) : dp(13));
+        cv.drawText(label, c, c - (txt.descent() + txt.ascent()) / 2f, txt);
+        return bmp;
+    }
+
     // ---------- manual stop selection ----------
 
     private void togglePickMode() {
@@ -915,6 +1131,7 @@ public class NearbyStopFragment extends Fragment {
             return;
         }
         pickMode = true;
+        stopVehiclePolling();
         pickHint.setVisibility(View.VISIBLE);
         changeStopButton.setText("Отмена");
         showPickMarkers();
@@ -935,6 +1152,7 @@ public class NearbyStopFragment extends Fragment {
         if (selectedStop != null) {
             drawStop();
             refreshHighlight(false);
+            startVehiclePolling();
         } else if (map != null) {
             map.clear();
         }
@@ -1054,6 +1272,9 @@ public class NearbyStopFragment extends Fragment {
     public void onResume() {
         super.onResume();
         mapView.onResume();
+        if (!routes.isEmpty() && !pickMode) {
+            startVehiclePolling();
+        }
         if (recheckOnResume) {
             recheckOnResume = false;
             start();
@@ -1062,6 +1283,7 @@ public class NearbyStopFragment extends Fragment {
 
     @Override
     public void onPause() {
+        stopVehiclePolling();
         mapView.onPause();
         super.onPause();
     }
@@ -1093,6 +1315,7 @@ public class NearbyStopFragment extends Fragment {
     @Override
     public void onDestroyView() {
         generation++;
+        vehiclePolling = false;
         handler.removeCallbacksAndMessages(null);
         stopLocationWatch();
         if (executor != null) {
@@ -1112,6 +1335,9 @@ public class NearbyStopFragment extends Fragment {
         chips.clear();
         pickMarkers.clear();
         shownLines.clear();
+        vehicleMarkers.clear();
+        vehicleIcons.clear();
+        shownVehicles = Collections.emptyList();
         super.onDestroyView();
     }
 }

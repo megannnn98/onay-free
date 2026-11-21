@@ -5,6 +5,7 @@ import java.util.List;
 import kz.onay.nearby.logic.RouteInfo;
 import kz.onay.nearby.logic.RouteLine;
 import kz.onay.nearby.logic.StopPoint;
+import kz.onay.nearby.logic.VehiclePosition;
 
 /** Everything the screen needs. Stage 2 uses {@link TestData}; later stages read the app's own data. */
 public interface NearbyDataSource {
@@ -29,6 +30,9 @@ public interface NearbyDataSource {
 
     /** How many routes of the last {@link #loadRoutesForStop} call could not be loaded. */
     int getFailedRouteCount();
+
+    /** A snapshot of the reported positions of vehicles on the given routes. Call off the main thread. */
+    List<VehiclePosition> loadVehicles(Collection<Long> routeIds) throws Exception;
 
     /** Route ids the server lists for the stop. */
     Collection<Long> getRouteIdsAtStop(long stopId);

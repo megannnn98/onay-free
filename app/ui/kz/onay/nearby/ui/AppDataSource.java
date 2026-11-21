@@ -28,6 +28,7 @@ import kz.onay.nearby.logic.RouteLine;
 import kz.onay.nearby.logic.RouteNames;
 import kz.onay.nearby.logic.StopNames;
 import kz.onay.nearby.logic.StopPoint;
+import kz.onay.nearby.logic.VehiclePosition;
 
 /**
  * Stops from the app's own Room database (kept up to date by the app) and routes from the app's own gRPC channel.
@@ -252,6 +253,60 @@ final class AppDataSource implements NearbyDataSource {
                 (int) r.getTypeId(), dirs));
         Log.i(TAG, "route " + routeId + ": " + dirs.size() + " directions, " + points + " points, "
                 + (System.nanoTime() - t0) / 1_000_000 + " ms");
+    }
+
+    /**
+     * PositionService.List: a finite stream with the latest report of every vehicle on the given routes.
+     * Nothing is written to the app's own position table, so the app's map is not disturbed.
+     * The map-matched route point is used when present (it lies on the drawn line), else the raw point.
+     */
+    @Override
+    public List<VehiclePosition> loadVehicles(Collection<Long> routeIds) {
+        applyAccountTokenQuietly();
+        var stub = (position.PositionServiceGrpc$PositionServiceBlockingStub) position.PositionServiceGrpc
+                .newBlockingStub(channel).withDeadlineAfter(RPC_DEADLINE_SECONDS, TimeUnit.SECONDS);
+        var builder = position.PositionServiceOuterClass$ListRequest.newBuilder();
+        for (Long id : routeIds) {
+            builder.addRoutes(id);
+        }
+        var req = (position.PositionServiceOuterClass$ListRequest) builder.build();
+        long now = System.currentTimeMillis() / 1000;
+        List<VehiclePosition> out = new ArrayList<>();
+        int withRoutePoint = 0;
+        int withActualPoint = 0;
+        long minAge = Long.MAX_VALUE;
+        long maxAge = Long.MIN_VALUE;
+        java.util.Iterator<?> it = stub.list(req);
+        while (it.hasNext()) {
+            var p = (position.PositionServiceOuterClass$Position) it.next();
+            boolean hasRoute = p.hasRoutePoint();
+            boolean hasActual = p.hasActualPoint();
+            if (!hasRoute && !hasActual) {
+                continue;
+            }
+            withRoutePoint += hasRoute ? 1 : 0;
+            withActualPoint += hasActual ? 1 : 0;
+            var point = hasRoute ? p.getRoutePoint() : p.getActualPoint();
+            long ts = hasActual ? p.getActualPoint().getTimestamp().getSeconds() : point.getTimestamp().getSeconds();
+            out.add(new VehiclePosition(p.getDeviceId(), p.getRouteId(), p.getDirectionIndex(),
+                    point.getLatitude(), point.getLongitude(), point.getBearing(), ts));
+            long age = now - ts;
+            minAge = Math.min(minAge, age);
+            maxAge = Math.max(maxAge, age);
+        }
+        Log.i(TAG, "vehicles on " + routeIds.size() + " routes: " + out.size() + " (routePoint " + withRoutePoint
+                + ", actualPoint " + withActualPoint + ")"
+                + (out.isEmpty() ? "" : ", report age " + minAge + ".." + maxAge + " s"));
+        return out;
+    }
+
+    /** Position polling repeats the token handoff, in case the account token changed; failures surface in the call. */
+    private void applyAccountTokenQuietly() {
+        try {
+            applyAccountToken();
+        } catch (Unavailable e) {
+            Log.w(TAG, "token handoff skipped: " + e.getMessage());
+        }
     }
 
     @Override

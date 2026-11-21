@@ -27,5 +27,5 @@ Smali и ресурсы на этом этапе **не менялись**. Вё
 - `OnayApp.get().getRouteComponent()` (`getRouteDatabase()`, `getManagedChannel()`); `OnayApp.get().getAccountManager().getAccount()`.
 - Поле `provideInterceptorProvider` в сгенерированном классе компонента Dagger (чтение рефлексией, `AppDataSource.interceptorOf`).
 - Room: `stopDao().getListRx()`, `localizationDao().getList("Stop", id)`.
-- gRPC и protobuf: `stop.StopServiceGrpc`, `route.RouteServiceGrpc`, их `OuterClass` и сообщения (имена вложенных классов через `$`).
+- gRPC и protobuf: `stop.StopServiceGrpc`, `route.RouteServiceGrpc`, `position.PositionServiceGrpc`, их `OuterClass` и сообщения (имена вложенных классов через `$`).
 - `kz.onay.ui.routes2.shared.MyLocationRequestHelper` (`getLocation()`).

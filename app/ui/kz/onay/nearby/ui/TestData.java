@@ -13,6 +13,7 @@ import kz.onay.nearby.logic.RouteDirectionInfo;
 import kz.onay.nearby.logic.RouteInfo;
 import kz.onay.nearby.logic.RouteLine;
 import kz.onay.nearby.logic.StopPoint;
+import kz.onay.nearby.logic.VehiclePosition;
 
 /**
  * Invented data for the stage 2 prototype. Coordinates only resemble central Almaty.
@@ -136,6 +137,27 @@ final class TestData implements NearbyDataSource {
     @Override
     public int getFailedRouteCount() {
         return 0;
+    }
+
+    /** Test-only: one pretend vehicle at the middle of every line, heading along its segment. */
+    @Override
+    public List<VehiclePosition> loadVehicles(Collection<Long> routeIds) {
+        long now = System.currentTimeMillis() / 1000;
+        List<VehiclePosition> out = new ArrayList<>();
+        long device = 1;
+        for (Long routeId : routeIds) {
+            for (RouteLine line : getLines(routeId)) {
+                if (!line.isDrawable()) {
+                    continue;
+                }
+                int i = line.size() / 2;
+                out.add(new VehiclePosition(device++, routeId, line.getDirectionIndex(),
+                        (line.getLat(i - 1) + line.getLat(i)) / 2, (line.getLng(i - 1) + line.getLng(i)) / 2,
+                        kz.onay.nearby.logic.Bearing.degrees(line.getLat(i - 1), line.getLng(i - 1),
+                                line.getLat(i), line.getLng(i)), now));
+            }
+        }
+        return out;
     }
 
     @Override

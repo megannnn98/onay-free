@@ -66,5 +66,14 @@ run_mutant age-minute-edge    AgeText.java               "if (ageMs < MINUTE_MS)
 run_mutant age-hour-edge      AgeText.java               "if (ageMs < HOUR_MS) {"          "if (ageMs <= HOUR_MS) {"
 run_mutant age-day-edge       AgeText.java               "if (ageMs < DAY_MS) {"           "if (ageMs <= DAY_MS) {"
 run_mutant age-wrong-unit     AgeText.java               'return (ageMs / HOUR_MS) + " ч назад";' 'return (ageMs / MINUTE_MS) + " ч назад";'
+run_mutant veh-no-route-filter VehicleFilter.java        "if (r == null) {"                "if (false) {"
+run_mutant veh-no-direction   VehicleFilter.java         "if (r.isDirectionKnown() && !r.getDirectionIndexes().contains(p.getDirectionIndex())) {" "if (false) {"
+run_mutant veh-direction-inv  VehicleFilter.java         "if (r.isDirectionKnown() && !r.getDirectionIndexes()" "if (!r.isDirectionKnown() && !r.getDirectionIndexes()"
+run_mutant veh-no-coords      VehicleFilter.java         "if (!validCoordinates(p.getLat(), p.getLng())) {" "if (false) {"
+run_mutant veh-age-strict     VehicleFilter.java         "if (nowSec - p.getTimestampSec() > maxAgeSec) {" "if (nowSec - p.getTimestampSec() >= maxAgeSec) {"
+run_mutant veh-no-age         VehicleFilter.java         "if (nowSec - p.getTimestampSec() > maxAgeSec) {" "if (false) {"
+run_mutant veh-oldest-wins    VehicleFilter.java         "p.getTimestampSec() > seen.getTimestampSec()" "p.getTimestampSec() < seen.getTimestampSec()"
+run_mutant veh-no-sort        VehicleFilter.java         "int c = Long.compare(a.getRouteId(), b.getRouteId());" "int c = 0;"
+run_mutant veh-null-island    VehicleFilter.java         "&& !(lat == 0.0 && lng == 0.0)"  ""
 echo "survivors: $survived"
 [ "$survived" -eq 0 ]
