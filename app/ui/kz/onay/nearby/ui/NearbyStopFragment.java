@@ -108,7 +108,8 @@ public class NearbyStopFragment extends Fragment {
     private static final double OVERVIEW_LNG_SPAN = 0.0040; // about 330 m at this latitude
     /** GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE: the nested type is not on the compile-only classpath. */
     private static final int REASON_GESTURE = 1;
-    private static final double CAMERA_VEHICLE_RADIUS_METERS = 1500.0;
+    private static final float PICK_MIN_ZOOM = 12f; // below this the map is not positioned on a place yet
+    private static final double CAMERA_VEHICLE_RADIUS_METERS = 600.0;
     private static final double STACK_RADIUS_METERS = 25.0;
     private static final long LOCATION_TIMEOUT_MS = 15_000L;
     private static final long BUTTON_LOCATION_TIMEOUT_MS = 8_000L;
@@ -1554,14 +1555,22 @@ public class NearbyStopFragment extends Fragment {
         vehicleMarkers.clear();
     }
 
-    /** Puts the camera near the user (or the middle of all stops) and keeps markers for the stops in view. */
+    /**
+     * Shows markers for the stops in view. The camera stays where the user has it: someone who looked at another
+     * part of the city and pressed "change" wants stops there, not a jump back to their own position. Only a map
+     * that was never positioned (world view) is moved: to the selected stop, else the user, else the stops.
+     */
     private void showPickMarkers() {
         if (map == null) {
             return;
         }
-        LatLng target = userLoc != null ? new LatLng(userLoc[0], userLoc[1]) : centroid(allStops);
-        if (target != null) {
-            moveTo(CameraUpdateFactory.newLatLngZoom(target, 16f), false);
+        cameraAuto = false;
+        if (map.getCameraPosition().zoom < PICK_MIN_ZOOM) {
+            LatLng target = selectedStop != null ? new LatLng(selectedStop.getLat(), selectedStop.getLng())
+                    : userLoc != null ? new LatLng(userLoc[0], userLoc[1]) : centroid(allStops);
+            if (target != null) {
+                moveTo(CameraUpdateFactory.newLatLngZoom(target, 16f), false);
+            }
         }
         map.setOnCameraIdleListener(this::refreshPickMarkers);
         refreshPickMarkers();
