@@ -54,9 +54,13 @@ run_mutant cand-extra-strict  NearbyCandidates.java      "if (m.getDistanceMeter
 run_mutant cand-no-dedupe     NearbyCandidates.java      "if (seen.add(m.getStop().getId())) {" "if (true) {"
 run_mutant cand-no-sort       NearbyCandidates.java      "int c = Double.compare(a.getDistanceMeters(), b.getDistanceMeters());" "int c = 0;"
 run_mutant cand-no-max        NearbyCandidates.java      "&& out.size() < max"             ""
-run_mutant names-no-exact     StopNames.java             "if (k.equalsIgnoreCase(preferredLanguage) && usable(byLanguage.get(k))) {" "if (false) {"
-run_mutant names-no-russian   StopNames.java             'if (primary(k).equals("ru") && usable(byLanguage.get(k))) {' "if (false) {"
-run_mutant names-no-placeholder StopNames.java           'return "Остановка " + stopId;'   'return "";'
-run_mutant names-blank-ok     StopNames.java             "return s != null && !s.trim().isEmpty();" "return s != null;"
+run_mutant names-no-exact     Translations.java             "if (k.equalsIgnoreCase(preferredLanguage) && usable(byLanguage.get(k))) {" "if (false) {"
+run_mutant names-no-russian   Translations.java             'if (primary(k).equals("ru") && usable(byLanguage.get(k))) {' "if (false) {"
+run_mutant names-no-placeholder StopNames.java           'return name != null ? name : "Остановка " + stopId;' 'return name != null ? name : "";'
+run_mutant names-blank-ok     Translations.java             "return s != null && !s.trim().isEmpty();" "return s != null;"
+run_mutant route-placeholder  RouteNames.java           'return name != null ? name.trim() : "Маршрут " + routeId;' 'return name != null ? name.trim() : "Остановка " + routeId;'
+run_mutant route-no-trim      RouteNames.java            "name.trim() :"                   "name :"
+run_mutant label-no-blank     DirectionLabel.java        "lastStopName.trim().isEmpty()"   "false"
+run_mutant label-no-trim      DirectionLabel.java        'return "в сторону " + lastStopName.trim();' 'return "в сторону " + lastStopName;'
 echo "survivors: $survived"
 [ "$survived" -eq 0 ]

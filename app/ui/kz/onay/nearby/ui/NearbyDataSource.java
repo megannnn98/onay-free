@@ -20,6 +20,16 @@ public interface NearbyDataSource {
     /** False while routes are not connected to real data; the screen then says so instead of showing nothing. */
     boolean hasRoutes();
 
+    /**
+     * Loads the routes of one stop (ids, directions, geometry) so that the getters below can answer.
+     * Call off the main thread. Throws when the stop itself cannot be loaded; routes that fail
+     * individually are only counted, see {@link #getFailedRouteCount()}.
+     */
+    void loadRoutesForStop(long stopId) throws Exception;
+
+    /** How many routes of the last {@link #loadRoutesForStop} call could not be loaded. */
+    int getFailedRouteCount();
+
     /** Route ids the server lists for the stop. */
     Collection<Long> getRouteIdsAtStop(long stopId);
 

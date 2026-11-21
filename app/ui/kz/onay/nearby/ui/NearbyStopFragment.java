@@ -88,11 +88,14 @@ public class NearbyStopFragment extends Fragment {
     private static final double ALTERNATIVE_EXTRA_METERS = 120.0;
     private static final int ALTERNATIVE_LIMIT = 3;
     private static final int PICK_LIMIT = 80;
+    private static final double OVERVIEW_LAT_SPAN = 0.0030; // about 330 m
+    private static final double OVERVIEW_LNG_SPAN = 0.0040; // about 330 m at this latitude
     private static final long LOCATION_TIMEOUT_MS = 15_000L;
     private static final long LOCATION_POLL_MS = 400L;
     private static final long MAX_FIX_AGE_MS = 120_000L;
     private static final int[] PALETTE = {
-        0xFF1565C0, 0xFFC62828, 0xFF2E7D32, 0xFFEF6C00, 0xFF6A1B9A, 0xFF00838F, 0xFFAD1457, 0xFF4E342E
+        0xFF1565C0, 0xFFC62828, 0xFF2E7D32, 0xFFEF6C00, 0xFF6A1B9A, 0xFF00838F, 0xFFAD1457, 0xFF4E342E,
+        0xFF283593, 0xFF827717, 0xFFD84315, 0xFF00695C
     };
 
     private final RouteHighlightState highlight = new RouteHighlightState();
@@ -137,6 +140,7 @@ public class NearbyStopFragment extends Fragment {
     private boolean pickMode;
 
     private StopPoint selectedStop;
+    private double selectedDistance = -1;
     private List<StopMatch> candidates = Collections.emptyList();
     private List<RouteAtStop> routes = Collections.emptyList();
 
@@ -271,8 +275,10 @@ public class NearbyStopFragment extends Fragment {
                 Log.i(TAG, "stops loaded: " + stops.size());
                 post(gen, () -> onStopsLoaded(src, stops));
             } catch (AppDataSource.Unavailable e) {
-                Log.w(TAG, "route component unavailable: " + e.getMessage());
-                post(gen, () -> showStatus("Город не выбран или данные транспорта ещё не готовы", "Повторить", this::start));
+                Log.w(TAG, "route data unavailable: " + e.getMessage());
+                post(gen, () -> showStatus(e.loginRequired
+                        ? "Войдите в приложение, чтобы видеть маршруты"
+                        : "Город не выбран или данные транспорта ещё не готовы", "Повторить", this::start));
             } catch (Exception e) {
                 Log.e(TAG, "stops load failed", e);
                 post(gen, () -> showStatus("Не удалось загрузить остановки", "Повторить", this::start));
@@ -473,8 +479,57 @@ public class NearbyStopFragment extends Fragment {
 
     // ---------- stop and routes ----------
 
+    /** Shows the stop at once and loads its routes in the background. */
     private void showStop(StopPoint stop, double distanceMeters) {
         selectedStop = stop;
+        selectedDistance = distanceMeters;
+        routes = Collections.emptyList();
+        colorIndex.clear();
+        highlight.clear();
+        titleView.setText(data.getStopName(stop.getId()));
+        updateSubtitle(data.hasRoutes() ? "загружаем маршруты…" : "маршруты пока не подключены");
+        buildCandidateButtons();
+        buildChips();
+        drawStop();
+        directionView.setText("");
+        if (data.hasRoutes()) {
+            loadRoutes(stop);
+        }
+    }
+
+    private void updateSubtitle(String tail) {
+        StringBuilder sub = new StringBuilder();
+        if (selectedDistance >= 0) {
+            sub.append(String.format(Locale.US, "%d м от вас · ", Math.round(selectedDistance)));
+        }
+        sub.append(tail);
+        subtitleView.setText(sub);
+    }
+
+    private void loadRoutes(StopPoint stop) {
+        final int gen = generation;
+        final NearbyDataSource src = data;
+        executor.execute(() -> {
+            try {
+                src.loadRoutesForStop(stop.getId());
+                post(gen, () -> onRoutesLoaded(stop));
+            } catch (Exception e) {
+                Log.e(TAG, "routes of stop " + stop.getId() + " not loaded", e);
+                final boolean login = e instanceof AppDataSource.Unavailable && ((AppDataSource.Unavailable) e).loginRequired;
+                post(gen, () -> onRoutesFailed(stop, login));
+            }
+        });
+    }
+
+    private boolean isStillSelected(StopPoint stop) {
+        return selectedStop != null && selectedStop.getId() == stop.getId() && !pickMode;
+    }
+
+    private void onRoutesLoaded(StopPoint stop) {
+        if (!isStillSelected(stop)) {
+            return;
+        }
+        statusBar.setVisibility(View.GONE);
         routes = RoutesAtStopSelector.select(stop.getId(), data.getRouteIdsAtStop(stop.getId()), data.getRoutes());
         List<Long> ids = new ArrayList<>();
         colorIndex.clear();
@@ -483,17 +538,25 @@ public class NearbyStopFragment extends Fragment {
             ids.add(r.getRouteId());
         }
         highlight.retainOnly(ids);
-        titleView.setText(data.getStopName(stop.getId()));
-        StringBuilder sub = new StringBuilder();
-        if (distanceMeters >= 0) {
-            sub.append(String.format(Locale.US, "%d м от вас · ", Math.round(distanceMeters)));
-        }
-        sub.append(data.hasRoutes() ? "маршрутов: " + routes.size() : "маршруты пока не подключены");
-        subtitleView.setText(sub);
-        buildCandidateButtons();
+        int failed = data.getFailedRouteCount();
+        String tail = routes.isEmpty() ? "маршрутов нет" : "маршрутов: " + routes.size();
+        updateSubtitle(failed > 0 ? tail + " (не загрузилось: " + failed + ")" : tail);
         buildChips();
         drawStop();
         refreshHighlight(false);
+    }
+
+    private void onRoutesFailed(StopPoint stop, boolean loginRequired) {
+        if (!isStillSelected(stop)) {
+            return;
+        }
+        updateSubtitle("маршруты не загрузились");
+        showStatus(loginRequired ? "Войдите в приложение, чтобы видеть маршруты"
+                : "Не удалось загрузить маршруты остановки", "Повторить", () -> {
+            statusBar.setVisibility(View.GONE);
+            updateSubtitle("загружаем маршруты…");
+            loadRoutes(stop);
+        });
     }
 
     /** Buttons for the other stops standing almost as close, typically the opposite side of the road. */
@@ -737,13 +800,17 @@ public class NearbyStopFragment extends Fragment {
         if (userLoc != null) {
             b.include(new LatLng(userLoc[0], userLoc[1]));
         }
-        for (Map.Entry<Long, List<RouteLine>> e : shownLines.entrySet()) {
-            if (routeId != null && !routeId.equals(e.getKey())) {
-                continue;
-            }
-            for (RouteLine line : e.getValue()) {
-                for (int i = 0; i < line.size(); i++) {
-                    b.include(new LatLng(line.getLat(i), line.getLng(i)));
+        if (routeId == null) {
+            // Overview: the neighbourhood of the stop. Lines run through the whole city, so they are not fitted.
+            b.include(new LatLng(selectedStop.getLat() - OVERVIEW_LAT_SPAN, selectedStop.getLng() - OVERVIEW_LNG_SPAN));
+            b.include(new LatLng(selectedStop.getLat() + OVERVIEW_LAT_SPAN, selectedStop.getLng() + OVERVIEW_LNG_SPAN));
+        } else {
+            List<RouteLine> chosen = shownLines.get(routeId);
+            if (chosen != null) {
+                for (RouteLine line : chosen) {
+                    for (int i = 0; i < line.size(); i++) {
+                        b.include(new LatLng(line.getLat(i), line.getLng(i)));
+                    }
                 }
             }
         }

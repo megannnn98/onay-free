@@ -130,6 +130,15 @@ final class TestData implements NearbyDataSource {
     }
 
     @Override
+    public void loadRoutesForStop(long stopId) {
+    }
+
+    @Override
+    public int getFailedRouteCount() {
+        return 0;
+    }
+
+    @Override
     public Collection<Long> getRouteIdsAtStop(long stopId) {
         List<Long> r = routeIdsByStop.get(stopId);
         return r == null ? Collections.<Long>emptyList() : r;

@@ -20,3 +20,12 @@ Smali и ресурсы на этом этапе **не менялись**. Вё
 - Особенности classpath: `enjarify` пишет class-файлы версии 49 (javac отвергает default-методы интерфейсов), поэтому версия поднимается до 52; атрибута `InnerClasses` нет, поэтому вложенные классы вроде `LatLngBounds.Builder` по имени недоступны (используется `var`).
 - R8 расширил доступ у части методов приложения (например `FragmentActivity.onCreate` стал `public`); переопределения в новом коде должны быть не слабее.
 - Конвертация в dex: `d8 --release --min-api 24`, классы приложения не включаются.
+
+## Зависимости новых классов от внутренностей приложения
+
+Новый код не меняет smali, но опирается на эти элементы версии 3.6.5 (при смене версии приложения их надо перепроверить):
+- `OnayApp.get().getRouteComponent()` (`getRouteDatabase()`, `getManagedChannel()`); `OnayApp.get().getAccountManager().getAccount()`.
+- Поле `provideInterceptorProvider` в сгенерированном классе компонента Dagger (чтение рефлексией, `AppDataSource.interceptorOf`).
+- Room: `stopDao().getListRx()`, `localizationDao().getList("Stop", id)`.
+- gRPC и protobuf: `stop.StopServiceGrpc`, `route.RouteServiceGrpc`, их `OuterClass` и сообщения (имена вложенных классов через `$`).
+- `kz.onay.ui.routes2.shared.MyLocationRequestHelper` (`getLocation()`).
