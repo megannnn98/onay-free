@@ -9,6 +9,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.location.Location;
@@ -31,6 +32,7 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
+import android.widget.ScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -60,8 +62,10 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import kz.onay.nearby.logic.AgeText;
+import kz.onay.nearby.logic.CameraFocus;
 import kz.onay.nearby.logic.Haversine;
 import kz.onay.nearby.logic.LocationQuality;
+import kz.onay.nearby.logic.MarkerStacking;
 import kz.onay.nearby.logic.NearbyCandidates;
 import kz.onay.nearby.logic.NearestStopFinder;
 import kz.onay.nearby.logic.RouteAtStop;
@@ -72,8 +76,8 @@ import kz.onay.nearby.logic.RoutesAtStopSelector;
 import kz.onay.nearby.logic.StopMatch;
 import kz.onay.nearby.logic.StopPoint;
 import kz.onay.nearby.logic.VehicleFilter;
+import kz.onay.nearby.logic.VehicleInfoText;
 import kz.onay.nearby.logic.VehiclePosition;
-import kz.onay.ui.main.MainActivity;
 import kz.onay.ui.routes2.shared.MyLocationRequestHelper;
 
 /**
@@ -101,6 +105,12 @@ public class NearbyStopFragment extends Fragment {
     private static final int VEHICLE_FAILURES_BEFORE_NOTE = 3;
     private static final double OVERVIEW_LAT_SPAN = 0.0030; // about 330 m
     private static final double OVERVIEW_LNG_SPAN = 0.0040; // about 330 m at this latitude
+    /** GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE: the nested type is not on the compile-only classpath. */
+    private static final int REASON_GESTURE = 1;
+    private static final float[][] STACK_ANCHORS = {{0.5f, 0.5f}, {0.5f, 1.1f}, {0.5f, -0.1f}, {1.1f, 0.5f}};
+    private static final float PICK_MIN_ZOOM = 12f; // below this the map is not positioned on a place yet
+    private static final double CAMERA_VEHICLE_RADIUS_METERS = 600.0;
+    private static final double STACK_RADIUS_METERS = 25.0;
     private static final long LOCATION_TIMEOUT_MS = 15_000L;
     private static final long BUTTON_LOCATION_TIMEOUT_MS = 8_000L;
     private static final long LOCATION_POLL_MS = 400L;
@@ -146,6 +156,17 @@ public class NearbyStopFragment extends Fragment {
     private HorizontalScrollView altScroll;
     private LinearLayout altRow;
     private HorizontalScrollView chipScroll;
+    private ScrollView chipFlowScroll;
+    private FlowLayout chipFlow;
+    private boolean chipsExpanded;
+    private Button allButton;
+    private TextView expandButton;
+    private TextView vehicleInfo;
+    private FrameLayout rootView;
+    private View topCardView;
+    private View dockView;
+    private FrameLayout.LayoutParams fabLp;
+    private boolean originalNavigationShown;
     private LinearLayout chipRow;
     private TextView directionView;
     private TextView vehicleNote;
@@ -162,6 +183,12 @@ public class NearbyStopFragment extends Fragment {
     private boolean mapLoaded;
     private CameraUpdate pendingCamera;
     private boolean pickMode;
+    private boolean routesLoadSkipped;
+    private boolean cameraAuto = true;
+    private int mapPadTop = -1;
+    private int mapPadBottom = -1;
+    private Marker raisedVehicle;
+    private long snapshotReferenceSec;
 
     private StopPoint selectedStop;
     private double selectedDistance = -1;
@@ -173,11 +200,13 @@ public class NearbyStopFragment extends Fragment {
         final Marker marker;
         final long routeId;
         final int bucket;
+        int stack;
 
-        VehicleMarker(Marker marker, long routeId, int bucket) {
+        VehicleMarker(Marker marker, long routeId, int bucket, int stack) {
             this.marker = marker;
             this.routeId = routeId;
             this.bucket = bucket;
+            this.stack = stack;
         }
     }
 
@@ -198,36 +227,89 @@ public class NearbyStopFragment extends Fragment {
         generation++;
         executor = Executors.newSingleThreadExecutor();
 
-        LinearLayout root = new LinearLayout(c);
-        root.setOrientation(LinearLayout.VERTICAL);
+        FrameLayout root = new FrameLayout(c);
+        rootView = root;
         root.setBackgroundColor(Color.WHITE);
-        if (requireActivity() instanceof MainActivity) {
-            // The rounded bottom bar and the round QR button of the main screen reach above the container.
-            root.setPadding(0, 0, 0, dp(44));
-        }
 
-        LinearLayout header = new LinearLayout(c);
-        header.setOrientation(LinearLayout.VERTICAL);
-        header.setPadding(dp(16), dp(12), dp(16), dp(4));
-        titleView = text(c, 22, true, 0xFF212121);
+        // The map fills the whole screen; the stop card and the route dock float above it.
+        mapView = new MapView(c);
+        root.addView(mapView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        myLocationButton = new ImageView(c);
+        myLocationButton.setImageBitmap(myLocationBitmap());
+        myLocationButton.setScaleType(ImageView.ScaleType.CENTER);
+        myLocationButton.setContentDescription("Моё местоположение");
+        GradientDrawable fabBg = new GradientDrawable();
+        fabBg.setShape(GradientDrawable.OVAL);
+        fabBg.setColor(Color.WHITE);
+        fabBg.setStroke(dp(1), 0x33000000);
+        myLocationButton.setBackground(fabBg);
+        myLocationButton.setElevation(dp(4));
+        myLocationButton.setOnClickListener(v -> onMyLocationClicked());
+        fabLp = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.BOTTOM | Gravity.END);
+        fabLp.setMargins(0, 0, dp(12), dp(124));
+        root.addView(myLocationButton, fabLp);
+
+        // ---- top card: stop name, distance, change stop, neighbouring stops, status ----
+        LinearLayout topCard = new LinearLayout(c);
+        topCardView = topCard;
+        topCard.setOrientation(LinearLayout.VERTICAL);
+        topCard.setPadding(dp(14), dp(10), dp(14), dp(8));
+        topCard.setBackground(cardBackground(dp(16)));
+        topCard.setElevation(dp(8));
+
+        LinearLayout titleRow = new LinearLayout(c);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        titleView = text(c, 20, true, 0xFF212121);
+        titleView.setMaxLines(2);
+        titleRow.addView(titleView, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView moreButton = text(c, 22, true, 0xFF616161);
+        moreButton.setText("⋯");
+        moreButton.setGravity(Gravity.CENTER);
+        moreButton.setContentDescription("Остальное: вкладки ONAY!, карты, оплата");
+        moreButton.setOnClickListener(v -> toggleOriginalNavigation());
+        titleRow.addView(moreButton, new LinearLayout.LayoutParams(dp(44), dp(40)));
+        topCard.addView(titleRow);
         subtitleView = text(c, 14, false, 0xFF616161);
-        header.addView(titleView);
-        header.addView(subtitleView);
-        root.addView(header);
+        topCard.addView(subtitleView);
 
+        pickHint = text(c, 14, true, Color.WHITE);
+        pickHint.setBackground(cardBackground(dp(10), 0xFF1565C0));
+        pickHint.setPadding(dp(12), dp(6), dp(12), dp(6));
+        pickHint.setText("Нажмите на остановку на карте");
+        pickHint.setVisibility(View.GONE);
+        LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        hintLp.topMargin = dp(6);
+        topCard.addView(pickHint, hintLp);
+
+        LinearLayout stopRow = new LinearLayout(c);
+        stopRow.setOrientation(LinearLayout.HORIZONTAL);
+        stopRow.setGravity(Gravity.CENTER_VERTICAL);
+        changeStopButton = new Button(c);
+        changeStopButton.setOnClickListener(v -> togglePickMode());
+        styleChangeStopButton(false);
+        stopRow.addView(changeStopButton, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)));
         altScroll = new HorizontalScrollView(c);
         altScroll.setHorizontalScrollBarEnabled(false);
         altRow = new LinearLayout(c);
         altRow.setOrientation(LinearLayout.HORIZONTAL);
-        altRow.setPadding(dp(12), 0, dp(12), 0);
+        altRow.setPadding(dp(8), 0, 0, 0);
         altScroll.addView(altRow);
         altScroll.setVisibility(View.GONE);
-        root.addView(altScroll);
+        stopRow.addView(altScroll, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams stopRowLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        stopRowLp.topMargin = dp(4);
+        topCard.addView(stopRow, stopRowLp);
 
         LinearLayout status = new LinearLayout(c);
         statusBar = status;
         status.setOrientation(LinearLayout.VERTICAL);
-        status.setPadding(dp(16), dp(4), dp(16), dp(4));
+        status.setPadding(0, dp(4), 0, 0);
         statusView = text(c, 15, false, 0xFF424242);
         LinearLayout buttons = new LinearLayout(c);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
@@ -253,61 +335,87 @@ public class NearbyStopFragment extends Fragment {
         buttonScroll.addView(buttons);
         status.addView(statusView);
         status.addView(buttonScroll);
-        root.addView(status);
+        topCard.addView(status);
+
+        FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
+        topLp.setMargins(dp(8), dp(8), dp(8), 0);
+        root.addView(topCard, topLp);
+
+        // ---- bottom dock: routes of the selected stop, selected route text, vehicle info, freshness ----
+        LinearLayout dock = new LinearLayout(c);
+        dockView = dock;
+        dock.setOrientation(LinearLayout.VERTICAL);
+        dock.setPadding(dp(8), dp(8), dp(8), dp(8));
+        dock.setBackground(cardBackground(dp(16)));
+        dock.setElevation(dp(8));
+
+        vehicleInfo = text(c, 14, true, Color.WHITE);
+        vehicleInfo.setBackground(cardBackground(dp(10), 0xFF37474F));
+        vehicleInfo.setPadding(dp(12), dp(6), dp(12), dp(6));
+        vehicleInfo.setVisibility(View.GONE);
+        LinearLayout.LayoutParams infoLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        infoLp.setMargins(dp(4), 0, dp(4), dp(6));
+        dock.addView(vehicleInfo, infoLp);
 
         chipScroll = new HorizontalScrollView(c);
         chipScroll.setHorizontalScrollBarEnabled(false);
         chipRow = new LinearLayout(c);
         chipRow.setOrientation(LinearLayout.HORIZONTAL);
-        chipRow.setPadding(dp(12), dp(4), dp(12), dp(4));
+        chipRow.setPadding(dp(4), dp(2), dp(4), dp(2));
         chipScroll.addView(chipRow);
-        root.addView(chipScroll);
+        chipFlow = new FlowLayout(c);
+        chipFlow.setPadding(dp(4), dp(2), dp(4), dp(2));
+        chipFlowScroll = new ScrollView(c) {
+            @Override
+            protected void onMeasure(int w, int h) {
+                super.onMeasure(w, MeasureSpec.makeMeasureSpec(dp(220), MeasureSpec.AT_MOST));
+            }
+        };
+        chipFlowScroll.addView(chipFlow);
+        chipFlowScroll.setVisibility(View.GONE);
+
+        LinearLayout chipHeader = new LinearLayout(c);
+        chipHeader.setOrientation(LinearLayout.HORIZONTAL);
+        chipHeader.setGravity(Gravity.CENTER_VERTICAL);
+        allButton = new Button(c);
+        allButton.setText("Все");
+        styleSecondaryButton(allButton);
+        allButton.setVisibility(View.GONE);
+        allButton.setOnClickListener(v -> {
+            highlight.clear();
+            refreshHighlight(false);
+            fitCamera(null);
+        });
+        expandButton = text(c, 18, true, PALETTE[0]);
+        expandButton.setText("⌃");
+        expandButton.setGravity(Gravity.CENTER);
+        expandButton.setContentDescription("Раскрыть список маршрутов");
+        expandButton.setOnClickListener(v -> toggleExpandedChips());
+        chipHeader.addView(allButton);
+        FrameLayout chipHost = new FrameLayout(c);
+        chipHost.addView(chipScroll);
+        chipHost.addView(chipFlowScroll);
+        chipHeader.addView(chipHost, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        chipHeader.addView(expandButton, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        dock.addView(chipHeader);
 
         directionView = text(c, 14, false, 0xFF424242);
-        directionView.setPadding(dp(16), dp(2), dp(16), dp(2));
-        root.addView(directionView);
+        directionView.setPadding(dp(6), dp(2), dp(6), dp(2));
+        dock.addView(directionView);
         vehicleNote = text(c, 12, false, 0xFF757575);
-        vehicleNote.setPadding(dp(16), 0, dp(16), dp(6));
-        root.addView(vehicleNote);
+        vehicleNote.setPadding(dp(6), 0, dp(6), 0);
+        dock.addView(vehicleNote);
 
-        FrameLayout mapFrame = new FrameLayout(c);
-        mapView = new MapView(c);
-        mapFrame.addView(mapView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        pickHint = text(c, 15, true, Color.WHITE);
-        pickHint.setBackgroundColor(0xCC1565C0);
-        pickHint.setPadding(dp(16), dp(8), dp(16), dp(8));
-        pickHint.setText("Нажмите на остановку на карте");
-        pickHint.setVisibility(View.GONE);
-        mapFrame.addView(pickHint, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP));
-        myLocationButton = new ImageView(c);
-        myLocationButton.setImageBitmap(myLocationBitmap());
-        myLocationButton.setScaleType(ImageView.ScaleType.CENTER);
-        myLocationButton.setContentDescription("Моё местоположение");
-        GradientDrawable fabBg = new GradientDrawable();
-        fabBg.setShape(GradientDrawable.OVAL);
-        fabBg.setColor(Color.WHITE);
-        fabBg.setStroke(dp(1), 0x33000000);
-        myLocationButton.setBackground(fabBg);
-        myLocationButton.setElevation(dp(4));
-        myLocationButton.setOnClickListener(v -> onMyLocationClicked());
-        FrameLayout.LayoutParams fabLp = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.BOTTOM | Gravity.END);
-        fabLp.setMargins(0, 0, dp(12), dp(124)); // above the map's zoom buttons
-        mapFrame.addView(myLocationButton, fabLp);
-        root.addView(mapFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        FrameLayout.LayoutParams dockLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
+        dockLp.setMargins(dp(8), 0, dp(8), dp(8));
+        root.addView(dock, dockLp);
 
-        LinearLayout bottomBar = new LinearLayout(c);
-        bottomBar.setOrientation(LinearLayout.HORIZONTAL);
-        bottomBar.setPadding(dp(16), dp(8), dp(16), dp(8));
-        changeStopButton = new Button(c);
-        changeStopButton.setOnClickListener(v -> togglePickMode());
-        styleChangeStopButton(false);
-        changeStopButton.setMinHeight(dp(48)); // not a fixed height: a large system font must not clip the text
-        bottomBar.addView(changeStopButton,
-                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        root.addView(bottomBar, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        View.OnLayoutChangeListener insets = (v, l, t, r, b, ol, ot, or, ob) -> updateMapInsets();
+        topCard.addOnLayoutChangeListener(insets);
+        dock.addOnLayoutChangeListener(insets);
 
         Bundle mapState = savedInstanceState == null ? null : savedInstanceState.getBundle(SAVED_MAP);
         mapView.onCreate(mapState);
@@ -549,6 +657,7 @@ public class NearbyStopFragment extends Fragment {
 
     /** Moves the "you are here" marker, refreshes the distance to the selected stop and centres the camera. */
     private void onMyLocation(double lat, double lng) {
+        cameraAuto = false; // the user asked to see themselves: layout changes must not undo it
         setMyLocationBusy(false);
         userLoc = new double[] {lat, lng};
         LatLng at = new LatLng(lat, lng);
@@ -694,6 +803,8 @@ public class NearbyStopFragment extends Fragment {
     private void showStop(StopPoint stop, double distanceMeters) {
         stopVehiclePolling();
         clearVehicles();
+        cameraAuto = true;
+        routesLoadSkipped = false;
         selectedStop = stop;
         selectedDistance = distanceMeters;
         routes = Collections.emptyList();
@@ -746,7 +857,11 @@ public class NearbyStopFragment extends Fragment {
     }
 
     private boolean isStillSelected(StopPoint stop) {
-        return selectedStop != null && selectedStop.getId() == stop.getId() && !pickMode;
+        boolean same = selectedStop != null && selectedStop.getId() == stop.getId();
+        if (same && pickMode) {
+            routesLoadSkipped = true; // the answer arrived while the user was choosing a stop: load again on cancel
+        }
+        return same && !pickMode;
     }
 
     private void onRoutesLoaded(StopPoint stop) {
@@ -816,6 +931,7 @@ public class NearbyStopFragment extends Fragment {
 
     private void buildChips() {
         chipRow.removeAllViews();
+        chipFlow.removeAllViews();
         chips.clear();
         Context c = requireContext();
         for (RouteAtStop r : routes) {
@@ -835,17 +951,44 @@ public class NearbyStopFragment extends Fragment {
                 highlight.toggle(id);
                 refreshHighlight(true);
             });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.setMargins(dp(4), 0, dp(4), 0);
-            chipRow.addView(chip, lp);
+            if (chipsExpanded) {
+                ViewGroup.MarginLayoutParams lp = new ViewGroup.MarginLayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                lp.setMargins(dp(4), dp(2), dp(4), dp(2));
+                chipFlow.addView(chip, lp);
+            } else {
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                lp.setMargins(dp(4), 0, dp(4), 0);
+                chipRow.addView(chip, lp);
+            }
             chips.put(id, chip);
         }
-        chipScroll.setVisibility(routes.isEmpty() ? View.GONE : View.VISIBLE);
+        chipScroll.setVisibility(routes.isEmpty() || chipsExpanded ? View.GONE : View.VISIBLE);
+        chipFlowScroll.setVisibility(routes.isEmpty() || !chipsExpanded ? View.GONE : View.VISIBLE);
+        expandButton.setVisibility(routes.isEmpty() ? View.GONE : View.VISIBLE);
+        expandButton.setText(chipsExpanded ? "⌄" : "⌃");
+        expandButton.setContentDescription(chipsExpanded ? "Свернуть список маршрутов" : "Раскрыть список маршрутов");
     }
 
     private static String typeLabel(int typeId) {
         return typeId == RouteInfo.TYPE_TROLLEYBUS ? "троллейбус" : "автобус";
+    }
+
+    /**
+     * Routes often share a street. Lines get different widths (the first route is the widest and lies at the
+     * bottom), so the colours of all routes stay visible side by side instead of the top one hiding the rest.
+     */
+    private int lineWidthOf(long routeId, boolean selected) {
+        Integer idx = colorIndex.get(routeId);
+        int n = Math.max(1, routes.size());
+        int base = dp(4) + ((n - 1) - (idx == null ? 0 : idx)) * dp(3);
+        return selected ? dp(4) + (n - 1) * dp(3) + dp(3) : base;
+    }
+
+    private float lineZOf(long routeId) {
+        Integer idx = colorIndex.get(routeId);
+        return 1f + (idx == null ? 0 : idx) / 100f;
     }
 
     /** Colours follow the order of routes at the stop, so routes shown together never share a colour. */
@@ -868,8 +1011,8 @@ public class NearbyStopFragment extends Fragment {
             if (pl != null) {
                 for (Polyline p : pl) {
                     p.setColor(withAlpha(colorOf(id), alpha));
-                    p.setWidth(sel ? dp(8) : dp(4));
-                    p.setZIndex(sel ? 3f : 1f);
+                    p.setWidth(lineWidthOf(id, sel));
+                    p.setZIndex(sel ? 3f : lineZOf(id));
                 }
             }
             List<Marker> ms = arrows.get(id);
@@ -886,6 +1029,7 @@ public class NearbyStopFragment extends Fragment {
             vm.marker.setZIndex(sel ? 8f : 7f);
         }
         updateDirectionText();
+        allButton.setVisibility(highlight.hasSelection() ? View.VISIBLE : View.GONE);
         if (moveCamera) {
             fitCamera(highlight.getSelectedRouteId());
         }
@@ -939,7 +1083,9 @@ public class NearbyStopFragment extends Fragment {
     private void onMapReady(GoogleMap googleMap) {
         map = googleMap;
         map.getUiSettings().setMapToolbarEnabled(false);
-        map.getUiSettings().setZoomControlsEnabled(true);
+        map.getUiSettings().setZoomControlsEnabled(false);
+        map.getUiSettings().setRotateGesturesEnabled(false); // badge arrows are drawn for a north-up map
+        updateMapInsets();
         map.setOnMapLoadedCallback(() -> {
             mapLoaded = true;
             if (pendingCamera != null) {
@@ -947,10 +1093,19 @@ public class NearbyStopFragment extends Fragment {
                 pendingCamera = null;
             }
         });
+        map.setOnCameraMoveStartedListener(reason -> {
+            if (reason == REASON_GESTURE) {
+                cameraAuto = false; // the user took the map: later layout changes must not move it
+            }
+        });
+        map.setOnMapClickListener(latLng -> hideVehicleInfo());
         map.setOnMarkerClickListener(marker -> {
             StopPoint s = pickMarkers.get(marker);
             if (pickMode && s != null) {
                 chooseStop(s);
+                return true;
+            }
+            if (showVehicleInfo(marker)) {
                 return true;
             }
             return false;
@@ -990,7 +1145,8 @@ public class NearbyStopFragment extends Fragment {
                 if (!servesStop || !line.isDrawable()) {
                     continue;
                 }
-                PolylineOptions po = new PolylineOptions().color(color).width(dp(4)).geodesic(false);
+                PolylineOptions po = new PolylineOptions().color(color).width(lineWidthOf(id, false)).geodesic(false)
+                        .zIndex(lineZOf(id));
                 for (int i = 0; i < line.size(); i++) {
                     po.add(new LatLng(line.getLat(i), line.getLng(i)));
                 }
@@ -1028,23 +1184,21 @@ public class NearbyStopFragment extends Fragment {
         }
         // 'var': the compile-only classpath has no InnerClasses attribute, so LatLngBounds.Builder cannot be named
         var b = LatLngBounds.builder();
-        b.include(new LatLng(selectedStop.getLat(), selectedStop.getLng()));
-        if (userLoc != null) {
-            b.include(new LatLng(userLoc[0], userLoc[1]));
-        }
-        if (routeId == null) {
-            // Overview: the neighbourhood of the stop. Lines run through the whole city, so they are not fitted.
-            b.include(new LatLng(selectedStop.getLat() - OVERVIEW_LAT_SPAN, selectedStop.getLng() - OVERVIEW_LNG_SPAN));
-            b.include(new LatLng(selectedStop.getLat() + OVERVIEW_LAT_SPAN, selectedStop.getLng() + OVERVIEW_LNG_SPAN));
-        } else {
-            List<RouteLine> chosen = shownLines.get(routeId);
-            if (chosen != null) {
-                for (RouteLine line : chosen) {
-                    for (int i = 0; i < line.size(); i++) {
-                        b.include(new LatLng(line.getLat(i), line.getLng(i)));
-                    }
+        // Always the neighbourhood of the stop (about 330 m), so a route never zooms the map out to the whole city.
+        b.include(new LatLng(selectedStop.getLat() - OVERVIEW_LAT_SPAN, selectedStop.getLng() - OVERVIEW_LNG_SPAN));
+        b.include(new LatLng(selectedStop.getLat() + OVERVIEW_LAT_SPAN, selectedStop.getLng() + OVERVIEW_LNG_SPAN));
+        List<VehiclePosition> routeVehicles = new ArrayList<>();
+        if (routeId != null) {
+            for (VehiclePosition v : shownVehicles) {
+                if (v.getRouteId() == routeId) {
+                    routeVehicles.add(v);
                 }
             }
+        }
+        // The selected route's vehicles near the stop are shown too; its line is not fitted (it crosses the city).
+        for (double[] pt : CameraFocus.points(selectedStop.getLat(), selectedStop.getLng(), userLoc,
+                routeVehicles, CAMERA_VEHICLE_RADIUS_METERS)) {
+            b.include(new LatLng(pt[0], pt[1]));
         }
         moveTo(CameraUpdateFactory.newLatLngBounds(b.build(), dp(48)), true);
     }
@@ -1138,7 +1292,7 @@ public class NearbyStopFragment extends Fragment {
                 if (result == null) {
                     vehicleFailures++;
                     if (vehicleFailures >= VEHICLE_FAILURES_BEFORE_NOTE) {
-                        vehicleNote.setText("Позиции транспорта недоступны, линии маршрутов показаны");
+                        vehicleNote.setText("Нет связи: показаны последние известные позиции, они могут устареть");
                     }
                     return;
                 }
@@ -1152,6 +1306,7 @@ public class NearbyStopFragment extends Fragment {
         long nowSec = System.currentTimeMillis() / 1000;
         // The snapshot's own time is the reference (see VehicleFilter.referenceSec): the phone clock may be off.
         long reference = VehicleFilter.referenceSec(reported, nowSec);
+        snapshotReferenceSec = reference;
         if (!reported.isEmpty() && VehicleFilter.latestTimestamp(reported) == 0L) {
             Log.w(TAG, "reports without timestamps: " + reported.size() + " will be hidden");
         }
@@ -1183,27 +1338,95 @@ public class NearbyStopFragment extends Fragment {
                 it.remove();
             }
         }
-        for (VehiclePosition p : shown) {
+        double[] lats = new double[shown.size()];
+        double[] lngs = new double[shown.size()];
+        for (int i = 0; i < lats.length; i++) {
+            lats[i] = shown.get(i).getLat();
+            lngs[i] = shown.get(i).getLng();
+        }
+        // Vehicles at (almost) the same spot: the icons are shifted apart, the real positions are not touched.
+        int[] stacks = MarkerStacking.stackIndexes(lats, lngs, STACK_RADIUS_METERS);
+        for (int i = 0; i < shown.size(); i++) {
+            VehiclePosition p = shown.get(i);
             String name = routeName(p.getRouteId());
-            int bucket = (int) Math.round(((p.getBearing() % 360 + 360) % 360) / 22.5) % 16;
+            // proto3 sends 0.0 when the vehicle has no bearing, so exactly 0.0 is treated as unknown (no arrow)
+            int bucket = Double.isNaN(p.getBearing()) || p.getBearing() == 0.0 ? -1
+                    : (int) Math.round(((p.getBearing() % 360 + 360) % 360) / 22.5) % 16;
             LatLng at = new LatLng(p.getLat(), p.getLng());
+            float[] anchor = stackAnchor(stacks[i]);
             VehicleMarker vm = vehicleMarkers.get(p.getDeviceId());
             if (vm != null && vm.bucket == bucket && vm.routeId == p.getRouteId()) {
                 vm.marker.setPosition(at);
+                if (vm.stack != stacks[i]) {
+                    vm.marker.setAnchor(anchor[0], anchor[1]);
+                    vm.stack = stacks[i];
+                }
                 continue;
             }
             if (vm != null) {
                 vm.marker.remove();
             }
-            Marker m = map.addMarker(new MarkerOptions().position(at).title("Маршрут " + name)
-                    .icon(vehicleIcon(name, colorOf(p.getRouteId()), bucket)).anchor(0.5f, 0.5f).flat(true)
+            Marker m = map.addMarker(new MarkerOptions().position(at)
+                    .icon(vehicleIcon(name, colorOf(p.getRouteId()), bucket)).anchor(anchor[0], anchor[1]).flat(false)
                     .alpha(highlight.alphaFor(p.getRouteId()))
                     .zIndex(highlight.isSelected(p.getRouteId()) ? 8f : 7f));
-            vehicleMarkers.put(p.getDeviceId(), new VehicleMarker(m, p.getRouteId(), bucket));
+            vehicleMarkers.put(p.getDeviceId(), new VehicleMarker(m, p.getRouteId(), bucket, stacks[i]));
         }
     }
 
+    /** Icon anchor for the n-th marker of a pile: centred, then above, below and to the side of the real spot. */
+    private static float[] stackAnchor(int n) {
+        return STACK_ANCHORS[n % STACK_ANCHORS.length];
+    }
+
+    private void hideVehicleInfo() {
+        vehicleInfo.setVisibility(View.GONE);
+        if (raisedVehicle != null) {
+            for (VehicleMarker vm : vehicleMarkers.values()) {
+                if (vm.marker.equals(raisedVehicle)) {
+                    vm.marker.setZIndex(highlight.isSelected(vm.routeId) ? 8f : 7f);
+                }
+            }
+            raisedVehicle = null;
+        }
+    }
+
+    /** Compact facts about the tapped vehicle: only what the app really knows (no arrival forecast). */
+    private boolean showVehicleInfo(Marker marker) {
+        for (Map.Entry<Long, VehicleMarker> e : vehicleMarkers.entrySet()) {
+            if (!e.getValue().marker.equals(marker)) {
+                continue;
+            }
+            VehiclePosition p = null;
+            for (VehiclePosition v : shownVehicles) {
+                if (v.getDeviceId() == e.getKey()) {
+                    p = v;
+                }
+            }
+            if (p == null) {
+                return false;
+            }
+            RouteAtStop r = null;
+            for (RouteAtStop candidate : routes) {
+                if (candidate.getRouteId() == p.getRouteId()) {
+                    r = candidate;
+                }
+            }
+            String type = r == null ? "транспорт" : typeLabel(r.getTypeId());
+            String dir = data.getDirectionLabel(p.getRouteId(), p.getDirectionIndex());
+            hideVehicleInfo();
+            raisedVehicle = marker;
+            vehicleInfo.setText(VehicleInfoText.format(routeName(p.getRouteId()), type, dir,
+                    Math.max(0L, snapshotReferenceSec - p.getTimestampSec())));
+            vehicleInfo.setVisibility(View.VISIBLE);
+            marker.setZIndex(9f);
+            return true;
+        }
+        return false;
+    }
+
     private void clearVehicles() {
+        hideVehicleInfo();
         for (VehicleMarker vm : vehicleMarkers.values()) {
             vm.marker.remove();
         }
@@ -1231,37 +1454,59 @@ public class NearbyStopFragment extends Fragment {
         return icon;
     }
 
-    /** A coloured disc with the route number and a small pointer toward the direction of travel. */
+    /**
+     * A rounded badge with a large, high-contrast route number and, separately, a small pointer outside the badge
+     * toward the direction of travel (bucket -1: direction unknown, no pointer). The badge centre is the icon centre.
+     */
     private Bitmap vehicleBitmap(String label, int color, int bucket) {
-        int size = dp(44);
-        float c = size / 2f;
-        float r = dp(14);
-        Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Paint txt = new Paint(Paint.ANTI_ALIAS_FLAG);
+        txt.setColor(Color.WHITE);
+        txt.setTypeface(Typeface.DEFAULT_BOLD);
+        txt.setTextAlign(Paint.Align.CENTER);
+        txt.setTextSize(dp(17));
+        float badgeH = dp(30);
+        float badgeW = Math.max(badgeH, txt.measureText(label) + dp(16));
+        int pad = dp(15);
+        int w = Math.round(badgeW) + 2 * pad;
+        int h = Math.round(badgeH) + 2 * pad;
+        float cx = w / 2f;
+        float cy = h / 2f;
+        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         Canvas cv = new Canvas(bmp);
         Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
         fill.setColor(color);
         Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
         ring.setStyle(Paint.Style.STROKE);
         ring.setColor(Color.WHITE);
-        ring.setStrokeWidth(dp(2));
-        cv.save();
-        cv.rotate(bucket * 22.5f, c, c);
-        Path tip = new Path();
-        tip.moveTo(c, c - r - dp(10));
-        tip.lineTo(c + dp(6), c - r + dp(2));
-        tip.lineTo(c - dp(6), c - r + dp(2));
-        tip.close();
-        cv.drawPath(tip, fill);
-        cv.drawPath(tip, ring);
-        cv.restore();
-        cv.drawCircle(c, c, r, fill);
-        cv.drawCircle(c, c, r, ring);
-        Paint txt = new Paint(Paint.ANTI_ALIAS_FLAG);
-        txt.setColor(Color.WHITE);
-        txt.setTypeface(Typeface.DEFAULT_BOLD);
-        txt.setTextAlign(Paint.Align.CENTER);
-        txt.setTextSize(label.length() > 2 ? dp(11) : dp(13));
-        cv.drawText(label, c, c - (txt.descent() + txt.ascent()) / 2f, txt);
+        ring.setStrokeWidth(dp(2.5f));
+        Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
+        edge.setStyle(Paint.Style.STROKE);
+        edge.setColor(0x66000000);
+        edge.setStrokeWidth(dp(1));
+        RectF badge = new RectF(cx - badgeW / 2, cy - badgeH / 2, cx + badgeW / 2, cy + badgeH / 2);
+        if (bucket >= 0) {
+            double rad = Math.toRadians(bucket * 22.5);
+            double dx = Math.sin(rad);
+            double dy = -Math.cos(rad);
+            double toEdgeX = Math.abs(dx) < 1e-6 ? Double.MAX_VALUE : (badgeW / 2) / Math.abs(dx);
+            double toEdgeY = Math.abs(dy) < 1e-6 ? Double.MAX_VALUE : (badgeH / 2) / Math.abs(dy);
+            float base = (float) Math.min(toEdgeX, toEdgeY) + dp(1);
+            float tip = base + dp(11);
+            float half = dp(7);
+            Path arrow = new Path();
+            arrow.moveTo(cx + (float) (dx * tip), cy + (float) (dy * tip));
+            arrow.lineTo(cx + (float) (dx * base - dy * half), cy + (float) (dy * base + dx * half));
+            arrow.lineTo(cx + (float) (dx * base + dy * half), cy + (float) (dy * base - dx * half));
+            arrow.close();
+            cv.drawPath(arrow, fill);
+            cv.drawPath(arrow, ring);
+        }
+        cv.drawRoundRect(badge, dp(9), dp(9), fill);
+        cv.drawRoundRect(badge, dp(9), dp(9), ring);
+        RectF outer = new RectF(badge);
+        outer.inset(-dp(1.75f), -dp(1.75f));
+        cv.drawRoundRect(outer, dp(10), dp(10), edge);
+        cv.drawText(label, cx, cy - (txt.descent() + txt.ascent()) / 2f, txt);
         return bmp;
     }
 
@@ -1276,6 +1521,7 @@ public class NearbyStopFragment extends Fragment {
     }
 
     private void enterPickMode() {
+        hideVehicleInfo();
         if (allStops.isEmpty()) {
             return;
         }
@@ -1305,6 +1551,11 @@ public class NearbyStopFragment extends Fragment {
         if (selectedStop != null) {
             drawStop();
             refreshHighlight(false);
+            if (routesLoadSkipped && data != null && data.hasRoutes()) {
+                routesLoadSkipped = false;
+                updateSubtitle("загружаем маршруты…");
+                loadRoutes(selectedStop);
+            }
             startVehiclePolling();
         } else if (map != null) {
             map.clear();
@@ -1321,14 +1572,22 @@ public class NearbyStopFragment extends Fragment {
         vehicleMarkers.clear();
     }
 
-    /** Puts the camera near the user (or the middle of all stops) and keeps markers for the stops in view. */
+    /**
+     * Shows markers for the stops in view. The camera stays where the user has it: someone who looked at another
+     * part of the city and pressed "change" wants stops there, not a jump back to their own position. Only a map
+     * that was never positioned (world view) is moved: to the selected stop, else the user, else the stops.
+     */
     private void showPickMarkers() {
         if (map == null) {
             return;
         }
-        LatLng target = userLoc != null ? new LatLng(userLoc[0], userLoc[1]) : centroid(allStops);
-        if (target != null) {
-            moveTo(CameraUpdateFactory.newLatLngZoom(target, 16f), false);
+        cameraAuto = false;
+        if (map.getCameraPosition().zoom < PICK_MIN_ZOOM) {
+            LatLng target = selectedStop != null ? new LatLng(selectedStop.getLat(), selectedStop.getLng())
+                    : userLoc != null ? new LatLng(userLoc[0], userLoc[1]) : centroid(allStops);
+            if (target != null) {
+                moveTo(CameraUpdateFactory.newLatLngZoom(target, 16f), false);
+            }
         }
         map.setOnCameraIdleListener(this::refreshPickMarkers);
         refreshPickMarkers();
@@ -1423,10 +1682,13 @@ public class NearbyStopFragment extends Fragment {
         bg.setColor(cancel ? Color.WHITE : blue);
         bg.setStroke(dp(2), blue);
         changeStopButton.setBackground(bg);
-        changeStopButton.setText(cancel ? "Отмена" : "Сменить остановку");
+        changeStopButton.setText(cancel ? "Отмена" : "Сменить");
         changeStopButton.setTextColor(cancel ? blue : Color.WHITE);
         changeStopButton.setAllCaps(false);
-        changeStopButton.setTextSize(16f);
+        changeStopButton.setTextSize(14f);
+        changeStopButton.setMinHeight(0);
+        changeStopButton.setMinimumHeight(0);
+        changeStopButton.setPadding(dp(16), 0, dp(16), 0);
         changeStopButton.setTypeface(Typeface.DEFAULT_BOLD);
         changeStopButton.setStateListAnimator(null);
         // A Material theme may tint whatever background we set: keep the two colours exactly as drawn.
@@ -1456,6 +1718,78 @@ public class NearbyStopFragment extends Fragment {
         b.setLayoutParams(lp);
     }
 
+    private GradientDrawable cardBackground(int radius) {
+        return cardBackground(radius, Color.WHITE);
+    }
+
+    private GradientDrawable cardBackground(int radius, int color) {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(radius);
+        bg.setColor(color);
+        return bg;
+    }
+
+    /** The cards hide part of the map: tell the map, so its camera, logo and buttons keep to the free part. */
+    private void updateMapInsets() {
+        if (topCardView == null || dockView == null) {
+            return;
+        }
+        if (rootView.getHeight() == 0) {
+            return; // not laid out yet
+        }
+        int top = topCardView.getBottom();
+        int bottom = Math.min(rootView.getHeight() - dockView.getTop(), rootView.getHeight() / 2);
+        if (map != null && top >= 0 && bottom >= 0 && (top != mapPadTop || bottom != mapPadBottom)) {
+            mapPadTop = top;
+            mapPadBottom = bottom;
+            map.setPadding(0, top, 0, bottom);
+            if (cameraAuto && selectedStop != null && !pickMode) {
+                fitCamera(highlight.getSelectedRouteId()); // the free part of the map changed: centre again
+            }
+        }
+        if (fabLp != null && bottom >= 0 && fabLp.bottomMargin != bottom + dp(12)) {
+            fabLp.bottomMargin = bottom + dp(12);
+            myLocationButton.setLayoutParams(fabLp);
+        }
+    }
+
+    private static final String[] ORIGINAL_NAVIGATION_IDS = {
+        "nav_routes", "nav_profile", "nav_life", "nav_life_hint", "nav_settings", "nav_image_qr", "nav_qr",
+        "viewShadow", "viewBottomBorder"
+    };
+
+    /**
+     * The original ONAY! tabs, QR button and payment stay in the app but are hidden by the layout patch.
+     * This button shows or hides them again (found by id name, so this code does not depend on the app's R class).
+     */
+    private void toggleOriginalNavigation() {
+        originalNavigationShown = !originalNavigationShown;
+        applyOriginalNavigation();
+    }
+
+    /** Called also on every resume: the host activity may restore its bar (for example after being recreated). */
+    private void applyOriginalNavigation() {
+        if (rootView == null) {
+            return;
+        }
+        Context c = requireContext();
+        for (String name : ORIGINAL_NAVIGATION_IDS) {
+            int id = c.getResources().getIdentifier(name, "id", c.getPackageName());
+            View v = id == 0 ? null : requireActivity().findViewById(id);
+            if (v != null) {
+                v.setVisibility(originalNavigationShown ? View.VISIBLE : View.GONE);
+            }
+        }
+        // The round QR button reaches above the container when the bar is shown.
+        rootView.setPadding(0, 0, 0, originalNavigationShown ? dp(44) : 0);
+    }
+
+    private void toggleExpandedChips() {
+        chipsExpanded = !chipsExpanded;
+        buildChips();
+        refreshHighlight(false);
+    }
+
     private int dp(float v) {
         return (int) (v * requireContext().getResources().getDisplayMetrics().density + 0.5f);
     }
@@ -1477,6 +1811,7 @@ public class NearbyStopFragment extends Fragment {
     public void onResume() {
         super.onResume();
         mapView.onResume();
+        applyOriginalNavigation();
         if (!routes.isEmpty() && !pickMode) {
             startVehiclePolling();
         }
@@ -1536,6 +1871,12 @@ public class NearbyStopFragment extends Fragment {
         mapLoaded = false;
         pendingCamera = null;
         pickMode = false;
+        cameraAuto = true;
+        mapPadTop = -1;
+        mapPadBottom = -1;
+        rootView = null;
+        topCardView = null;
+        dockView = null;
         polylines.clear();
         arrows.clear();
         chips.clear();
