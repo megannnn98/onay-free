@@ -21,6 +21,11 @@ on:
         required: true
         default: "v0.0.1"
         type: string
+      new_signing_key:
+        description: "Explicitly allow a NEW certificate ONLY for independent package kz.onay.free"
+        required: true
+        default: false
+        type: boolean
       dry_run:
         description: "Build and verify only: keep the APK as a 3-day workflow artifact and publish nothing"
         required: true
@@ -100,6 +105,14 @@ jobs:
           "$sdkmanager" --install "build-tools;35.0.1" >/dev/null
           echo "$ANDROID_HOME/build-tools/35.0.1" >> "$GITHUB_PATH"
 
+      - name: Fetch pinned apktool for package identity rebase
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/apktool.jar" \
+            https://github.com/iBotPeaches/Apktool/releases/download/v2.12.1/apktool_2.12.1.jar
+          echo "66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa  $RUNNER_TEMP/apktool.jar" | sha256sum -c -
+          echo "APKTOOL_JAR=$RUNNER_TEMP/apktool.jar" >> "$GITHUB_ENV"
+
       - name: Download previously signed split archive
         env:
           GH_TOKEN: ${{ github.token }}
@@ -121,6 +134,7 @@ jobs:
           ONAY_KS_PASS: ${{ secrets.ONAY_KS_PASS }}
           ONAY_KS_ALIAS: ${{ secrets.ONAY_KS_ALIAS }}
           TAG: ${{ inputs.tag }}
+          ONAY_PACKAGE_NAME: kz.onay.free
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/onay"
@@ -133,16 +147,24 @@ jobs:
           OUTPUT_APK="work/release/onay-free-${TAG#v}.apk" \
           bash scripts/build_universal_apk.sh
 
-      - name: Verify packaging and that the signing certificate matches the original release
+      - name: Verify packaging and enforce explicit certificate policy
         env:
           TAG: ${{ inputs.tag }}
+          NEW_KEY: ${{ inputs.new_signing_key }}
         run: |
           set -euo pipefail
           unzip -p "$SPLITS_ARCHIVE" base.apk > "$RUNNER_TEMP/onay/base.apk"
           src="$(apksigner verify --print-certs "$RUNNER_TEMP/onay/base.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
           [ -n "$src" ] || { echo "::error::Cannot read the certificate of the source release"; exit 1; }
           apk="work/release/onay-free-${TAG#v}.apk"
-          bash scripts/verify_universal_apk.sh "$apk" "$src" | tee "$RUNNER_TEMP/verify.txt"
+          if [ "$NEW_KEY" = "true" ]; then
+            # A different certificate is safe *only* because this APK is
+            # independently installed as kz.onay.free, never as kz.onay.
+            EXPECTED_PACKAGE=kz.onay.free bash scripts/verify_universal_apk.sh "$apk" | tee "$RUNNER_TEMP/verify.txt"
+            echo "NOTICE: a new signing key was explicitly allowed for independent kz.onay.free."
+          else
+            EXPECTED_PACKAGE=kz.onay.free bash scripts/verify_universal_apk.sh "$apk" "$src" | tee "$RUNNER_TEMP/verify.txt"
+          fi
           {
             echo "### APK checks"
             echo '```'
@@ -167,6 +189,7 @@ jobs:
           TAG: ${{ inputs.tag }}
           SOURCE_TAG: ${{ inputs.source_tag }}
           PRERELEASE: ${{ inputs.prerelease }}
+          NEW_KEY: ${{ inputs.new_signing_key }}
         run: |
           set -euo pipefail
           if [ "$PRERELEASE" = "true" ]; then
@@ -174,7 +197,8 @@ jobs:
           else
             status='Выпуск отмечен как проверенный на устройстве (отметка выставлена вручную при запуске workflow).'
           fi
-          sed -e "s/@VERSION@/${TAG#v}/g" \
+          sed -e "s/@SIGNING_CHANGE@/$NEW_KEY/g" \
+              -e "s/@VERSION@/${TAG#v}/g" \
               -e "s/@SOURCE_TAG@/${SOURCE_TAG}/g" \
               -e "s/@SHA256@/${APK_SHA256}/g" \
               docs/release-notes-template.md > "$RUNNER_TEMP/notes.md"
@@ -202,6 +226,6 @@ jobs:
             --notes-file "$RUNNER_TEMP/notes.md" \
             "${flags[@]}"
 
-      - name: Remove the signing key from the runner
+      - name: Remove signing artifacts from runner
         if: always()
-        run: rm -f "$RUNNER_TEMP/onay/signing.jks" "$RUNNER_TEMP/onay/base.apk"
+        run: rm -f "$RUNNER_TEMP/onay/signing.jks" "$RUNNER_TEMP/onay/base.apk" "$RUNNER_TEMP/apktool.jar"
