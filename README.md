@@ -92,6 +92,10 @@ python3 -m unittest discover -s tests -v
 
 100 JUnit-тестов на логику, 53 мутанта убиты. Подробности в `TEST_RESULTS.md`.
 
+## Дизайн следующей версии (предложение)
+
+[Stop-first / map-first UX](docs/design/STOP_FIRST_UI.md) — дизайн-концепция переработки главного экрана: ближайшая остановка определяет маршруты, а карта показывает номера и позиции автобусов. [Интерактивный HTML-прототип](docs/design/stop-first-preview.html) и [изображение главного экрана](docs/design/stop-first-main.svg). Это **макет, а не часть текущего Android APK**. Связан с [Issue #3](https://github.com/megannnn98/onay-free/issues/3).
+
 ## Документация
 
 - [`ONAY_REVERSE_ENGINEERING.md`](ONAY_REVERSE_ENGINEERING.md): как устроено оригинальное приложение и почему выбран подход с минимальными правками.
