@@ -62,5 +62,9 @@ run_mutant route-placeholder  RouteNames.java           'return name != null ? n
 run_mutant route-no-trim      RouteNames.java            "name.trim() :"                   "name :"
 run_mutant label-no-blank     DirectionLabel.java        "lastStopName.trim().isEmpty()"   "false"
 run_mutant label-no-trim      DirectionLabel.java        'return "в сторону " + lastStopName.trim();' 'return "в сторону " + lastStopName;'
+run_mutant age-minute-edge    AgeText.java               "if (ageMs < MINUTE_MS) {"        "if (ageMs <= MINUTE_MS) {"
+run_mutant age-hour-edge      AgeText.java               "if (ageMs < HOUR_MS) {"          "if (ageMs <= HOUR_MS) {"
+run_mutant age-day-edge       AgeText.java               "if (ageMs < DAY_MS) {"           "if (ageMs <= DAY_MS) {"
+run_mutant age-wrong-unit     AgeText.java               'return (ageMs / HOUR_MS) + " ч назад";' 'return (ageMs / MINUTE_MS) + " ч назад";'
 echo "survivors: $survived"
 [ "$survived" -eq 0 ]

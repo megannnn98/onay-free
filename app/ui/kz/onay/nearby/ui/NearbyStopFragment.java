@@ -55,6 +55,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import kz.onay.nearby.logic.AgeText;
 import kz.onay.nearby.logic.Haversine;
 import kz.onay.nearby.logic.LocationQuality;
 import kz.onay.nearby.logic.NearbyCandidates;
@@ -125,7 +126,10 @@ public class NearbyStopFragment extends Fragment {
     private TextView subtitleView;
     private TextView statusView;
     private Button actionButton;
+    private Button actionButton2;
     private Runnable action;
+    private Runnable action2;
+    private String locationNote;
     private HorizontalScrollView altScroll;
     private LinearLayout altRow;
     private HorizontalScrollView chipScroll;
@@ -185,19 +189,27 @@ public class NearbyStopFragment extends Fragment {
 
         LinearLayout status = new LinearLayout(c);
         statusBar = status;
-        status.setOrientation(LinearLayout.HORIZONTAL);
-        status.setGravity(Gravity.CENTER_VERTICAL);
+        status.setOrientation(LinearLayout.VERTICAL);
         status.setPadding(dp(16), dp(4), dp(16), dp(4));
         statusView = text(c, 15, false, 0xFF424242);
-        statusView.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout buttons = new LinearLayout(c);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
         actionButton = new Button(c);
         actionButton.setOnClickListener(v -> {
             if (action != null) {
                 action.run();
             }
         });
+        actionButton2 = new Button(c);
+        actionButton2.setOnClickListener(v -> {
+            if (action2 != null) {
+                action2.run();
+            }
+        });
+        buttons.addView(actionButton);
+        buttons.addView(actionButton2);
         status.addView(statusView);
-        status.addView(actionButton);
+        status.addView(buttons);
         root.addView(status);
 
         chipScroll = new HorizontalScrollView(c);
@@ -250,6 +262,7 @@ public class NearbyStopFragment extends Fragment {
         handler.removeCallbacksAndMessages(null);
         stopLocationWatch();
         final int gen = generation;
+        locationNote = null;
         leavePickState();
         clearCandidates();
         showStatus("Ищем ближайшую остановку…", null, null);
@@ -403,15 +416,33 @@ public class NearbyStopFragment extends Fragment {
                 } else if (SystemClock.elapsedRealtime() > locationDeadline) {
                     Log.w(TAG, "no usable fix: " + v);
                     stopLocationWatch();
-                    noLocation(v == LocationQuality.Verdict.STALE
-                            ? "Координаты устарели, свежих нет. Повторите или выберите остановку вручную."
-                            : "Не удалось определить местоположение. Повторите или выберите остановку вручную.",
-                            "Повторить", NearbyStopFragment.this::start);
+                    if (v == LocationQuality.Verdict.STALE && loc != null) {
+                        offerStaleLocation(loc);
+                    } else {
+                        noLocation("Не удалось определить местоположение. Повторите или выберите остановку вручную.",
+                                "Повторить", NearbyStopFragment.this::start);
+                    }
                 } else {
                     handler.postDelayed(this, LOCATION_POLL_MS);
                 }
             }
         }, LOCATION_POLL_MS);
+    }
+
+    /** No fresh fix: lets the user decide whether the last known position is good enough, showing its age. */
+    private void offerStaleLocation(Location loc) {
+        final double lat = loc.getLatitude();
+        final double lng = loc.getLongitude();
+        final String age = AgeText.ago(System.currentTimeMillis() - loc.getTime());
+        showStatus("Свежей координаты нет. Последнее известное положение: " + age + ".",
+                "Использовать его", () -> {
+                    leavePickState();
+                    statusBar.setVisibility(View.GONE);
+                    onLocation(lat, lng);
+                    locationNote = age;
+                    updateSubtitleNote();
+                }, "Повторить", this::start);
+        enterPickMode();
     }
 
     private void stopLocationWatch() {
@@ -470,11 +501,19 @@ public class NearbyStopFragment extends Fragment {
     }
 
     private void showStatus(String message, @Nullable String actionLabel, @Nullable Runnable onAction) {
+        showStatus(message, actionLabel, onAction, null, null);
+    }
+
+    private void showStatus(String message, @Nullable String label, @Nullable Runnable onAction,
+            @Nullable String label2, @Nullable Runnable onAction2) {
         statusBar.setVisibility(View.VISIBLE);
         statusView.setText(message);
         action = onAction;
-        actionButton.setText(actionLabel);
-        actionButton.setVisibility(actionLabel == null ? View.GONE : View.VISIBLE);
+        action2 = onAction2;
+        actionButton.setText(label);
+        actionButton.setVisibility(label == null ? View.GONE : View.VISIBLE);
+        actionButton2.setText(label2);
+        actionButton2.setVisibility(label2 == null ? View.GONE : View.VISIBLE);
     }
 
     // ---------- stop and routes ----------
@@ -497,12 +536,23 @@ public class NearbyStopFragment extends Fragment {
         }
     }
 
+    private String subtitleTail = "";
+
     private void updateSubtitle(String tail) {
+        subtitleTail = tail;
+        updateSubtitleNote();
+    }
+
+    private void updateSubtitleNote() {
         StringBuilder sub = new StringBuilder();
         if (selectedDistance >= 0) {
-            sub.append(String.format(Locale.US, "%d м от вас · ", Math.round(selectedDistance)));
+            sub.append(String.format(Locale.US, "%d м от вас", Math.round(selectedDistance)));
+            if (locationNote != null) {
+                sub.append(" (положение: ").append(locationNote).append(")");
+            }
+            sub.append(" · ");
         }
-        sub.append(tail);
+        sub.append(subtitleTail);
         subtitleView.setText(sub);
     }
 
