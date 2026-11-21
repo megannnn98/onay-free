@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Merge the signed ONAY! split set into one installable APK and re-sign it.
 # May also be run against an existing .apks release archive.
+# ONAY_PACKAGE_NAME=kz.onay.free creates an independently installable app.
+# ONAY_PACKAGE_NAME=kz.onay retains legacy behavior for forensic comparisons.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,6 +16,12 @@ EDITOR_SHA256="a9cd40df818845456be6d696de6110c89edf4b0a0580cb83438ed6b25a366e67"
 : "${ONAY_KS:?set ONAY_KS to the signing keystore path}"
 : "${ONAY_KS_PASS:?set ONAY_KS_PASS to the signing key password}"
 ALIAS="${ONAY_KS_ALIAS:-test}"
+APKTOOL_JAR="${APKTOOL_JAR:-}"
+ONAY_PACKAGE_NAME="${ONAY_PACKAGE_NAME:-kz.onay.free}"
+case "$ONAY_PACKAGE_NAME" in
+  kz.onay|kz.onay.free) ;;
+  *) echo "unsupported ONAY_PACKAGE_NAME: $ONAY_PACKAGE_NAME" >&2; exit 1 ;;
+esac
 
 for tool in java zipalign apksigner unzip; do
   command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 1; }
@@ -80,8 +88,36 @@ java -Xmx6g -jar "$APKEDITOR_JAR" m -i "$SPLITS_INPUT" \
   -o "$work/merged-unsigned.apk" -validate-modules -clean-meta
 [ -s "$work/merged-unsigned.apk" ] || { echo "APKEditor produced no APK" >&2; exit 1; }
 
+# Only the *merged standalone APK* changes package identity. Existing split
+# APKs are intentionally kept as legacy kz.onay; the OS never sees them.
+unsigned="$work/merged-unsigned.apk"
+if [ "$ONAY_PACKAGE_NAME" = "kz.onay.free" ]; then
+  echo "[identity] preserve DEX namespace; rebase manifest package after split merge"
+  [ -n "$APKTOOL_JAR" ] || command -v apktool >/dev/null || {
+    echo "clone build needs apktool or APKTOOL_JAR" >&2; exit 1;
+  }
+  command -v aapt2 >/dev/null || { echo "clone build needs aapt2" >&2; exit 1; }
+  command -v python3 >/dev/null || { echo "clone build needs python3" >&2; exit 1; }
+  run_apktool() {
+    if [ -n "$APKTOOL_JAR" ]; then
+      java -Xmx6g -jar "$APKTOOL_JAR" "$@"
+    else
+      apktool -JXmx6g "$@"
+    fi
+  }
+  run_apktool d -f -r -s -o "$work/decoded" "$unsigned"
+  python3 -I "$ROOT/scripts/patch_clone_manifest.py" "$work/decoded/AndroidManifest.xml"
+  run_apktool b -f -o "$work/cloned-unsigned.apk" "$work/decoded"
+  python3 -I "$ROOT/scripts/verify_clone_payload.py" "$unsigned" "$work/cloned-unsigned.apk"
+  unsigned="$work/cloned-unsigned.apk"
+  actual_package="$(aapt2 dump badging "$unsigned" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1)"
+  [ "$actual_package" = "$ONAY_PACKAGE_NAME" ] || {
+    echo "clone built as $actual_package, expected $ONAY_PACKAGE_NAME" >&2; exit 1;
+  }
+fi
+
 echo "[2/4] align"
-zipalign -f -p 4 "$work/merged-unsigned.apk" "$work/aligned.apk"
+zipalign -f -p 4 "$unsigned" "$work/aligned.apk"
 zipalign -c -p 4 "$work/aligned.apk"
 
 echo "[3/4] sign with the same key as the split build"
