@@ -72,7 +72,6 @@ import kz.onay.nearby.logic.StopPoint;
 import kz.onay.nearby.logic.VehicleFilter;
 import kz.onay.nearby.logic.VehiclePosition;
 import kz.onay.ui.main.MainActivity;
-import kz.onay.ui.routes2.frontscreen.RoutesFragment;
 import kz.onay.ui.routes2.shared.MyLocationRequestHelper;
 
 /**
@@ -279,12 +278,6 @@ public class NearbyStopFragment extends Fragment {
         changeStopButton.setText("Сменить остановку");
         changeStopButton.setOnClickListener(v -> togglePickMode());
         bottomBar.addView(changeStopButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        if (requireActivity() instanceof MainActivity) {
-            Button classic = new Button(c);
-            classic.setText("Обычная карта");
-            classic.setOnClickListener(v -> openClassicMap());
-            bottomBar.addView(classic, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        }
         root.addView(bottomBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -1252,13 +1245,6 @@ public class NearbyStopFragment extends Fragment {
             }
         }
         return n == 0 ? null : new LatLng(la / n, ln / n);
-    }
-
-    /** Replaces this screen with the app's original transport screen, the way the main screen swaps tabs. */
-    private void openClassicMap() {
-        if (requireActivity() instanceof MainActivity) {
-            ((MainActivity) requireActivity()).M1(RoutesFragment.newInstance());
-        }
     }
 
     // ---------- helpers ----------

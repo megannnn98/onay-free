@@ -1,0 +1,111 @@
+@startuml
+title ONAY! NearbyStopFragment: архитектура и потоки данных
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+package "Оригинальное приложение ONAY! 3.6.5" as ORIG {
+  [MainActivity\nQ0(int): вкладки] as MAIN
+  [RoutesFragment\n(оригинальный экран транспорта)] as ROUTES
+  [ProfileFragment\n(экран карт)] as PROFILE
+  [LifeFragment\n(купоны, партнёры)\nбольше не открывается] as LIFE
+  [MyLocationRequestHelper] as LOCHELP
+  [RouteComponent (Dagger)\ngetRouteDatabase()\ngetManagedChannel()] as RCOMP
+  [GrpcHeaderClientInterceptor\n(заголовки и токен)] as INTERCEPT
+  database "Room RouteDatabase\nStop, Localization" as ROOM
+  [AccountManager] as ACCOUNT
+}
+
+package "Новый код (classes12.dex)" as NEW {
+  package "kz.onay.nearby.ui" {
+    [NearbyStopFragment\nэкран, карта, кнопки, опрос] as FRAG
+    [AppDataSource\nостановки, маршруты, транспорт] as APPDS
+    [TestData\n(только отладочная сборка)] as TESTDS
+    [NearbyStopDebugActivity\n(только отладочная сборка)] as DBG
+  }
+  package "kz.onay.nearby.logic (чистая Java, JVM-тесты)" {
+    [NearestStopFinder\nNearbyCandidates\nHaversine] as FINDER
+    [RoutesAtStopSelector\nRouteNames\nDirectionLabel] as SELECT
+    [RouteHighlightState\nBearing\nRouteLine] as HIGHLIGHT
+    [VehicleFilter\nVehiclePosition] as VEHF
+    [LocationQuality\nAgeText\nStopNames] as MISC
+  }
+}
+
+cloud "gRPC сервер города\n(mapUrl города)" as SERVER {
+  [StopService.Get] as SSTOP
+  [RouteService.Get] as SROUTE
+  [PositionService.List] as SPOS
+}
+
+MAIN --> ROUTES : вкладка Routes (без изменений)
+MAIN --> PROFILE : вкладка Cards (без изменений)
+MAIN --> FRAG : вкладка Life (smali-правка)
+MAIN ..> LIFE : заменено на FRAG
+
+FRAG --> LOCHELP : getLocation() с опросом
+FRAG --> APPDS
+DBG --> FRAG : отладка (adb)
+FRAG ..> TESTDS : data=test
+FRAG --> FINDER
+FRAG --> SELECT
+FRAG --> HIGHLIGHT
+FRAG --> VEHF
+FRAG --> MISC
+
+APPDS --> RCOMP
+RCOMP --> ROOM
+RCOMP --> INTERCEPT
+APPDS --> ACCOUNT : токен в перехватчик\n(как у родных экранов)
+APPDS --> SSTOP : id маршрутов остановки
+APPDS --> SROUTE : направления, остановки, линия
+APPDS --> SPOS : позиции транспорта, раз в 5 с
+INTERCEPT ..> SERVER : заголовки
+
+note right of APPDS
+  Тот же канал, что у приложения.
+  Таблица Position родных экранов
+  не используется и не изменяется.
+end note
+@enduml
+
+@startuml
+title Движение данных от GPS до автобусов на карте
+
+actor Пользователь
+participant "NearbyStopFragment" as F
+participant "MyLocationRequestHelper" as G
+participant "AppDataSource" as D
+database "Room (Stop)" as DB
+participant "NearestStopFinder\nNearbyCandidates" as N
+participant "gRPC: StopService /\nRouteService" as S
+participant "RoutesAtStopSelector" as R
+participant "gRPC: PositionService" as P
+participant "VehicleFilter" as V
+
+Пользователь -> F : открывает вкладку «Routes»
+F -> D : getStops() (фон)
+D -> DB : stopDao().getListRx()
+DB --> F : 4021 остановка
+F -> G : getLocation() каждые 400 мс
+G --> F : координата (до 15 с)
+F -> N : findNearby(радиус 1 км, до 5)
+N --> F : ближайшая + соседние остановки
+F -> D : loadRoutesForStop(stopId) (фон)
+D -> S : StopService.Get -> Routes
+D -> S : RouteService.Get для каждого маршрута
+S --> F : направления, остановки, линия
+F -> R : select(stopId, маршруты)
+R --> F : кнопки маршрутов
+F -> F : линии и стрелки на карте (один раз)
+loop пока экран виден, каждые 5 с
+  F -> D : loadVehicles(routeIds) (фон)
+  D -> P : PositionService.List
+  P --> F : позиции
+  F -> V : select(направления, свежесть, координаты)
+  V --> F : транспорт для показа
+  F -> F : обновить маркеры на месте
+end
+Пользователь -> F : нажимает номер
+F -> F : выделить маршрут, остальные прозрачнее
+@enduml

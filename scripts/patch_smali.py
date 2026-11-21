@@ -1,10 +1,7 @@
 """Patches the decoded smali of ONAY! 3.6.5. Every smali change is listed here and in docs/PATCHES.md.
 
-Patch 1: MainActivity.Q0(int), tab 0 (transport) returns NearbyStopFragment instead of RoutesFragment.
-The original screen stays reachable through the "Обычная карта" button of the new screen.
-
-Patch 2: MainActivity.Q0(int), tab 2 (Life) returns ProfileFragment, the same screen as tab 1 (Cards),
-instead of the coupons and partner section.
+MainActivity.Q0(int), tab 2 (Life, the coupons and partner section) returns NearbyStopFragment.
+The transport tab (0) keeps the original RoutesFragment, so the original transport map stays one tab away.
 
 Each replacement must match exactly once, otherwise the build stops: a changed app version must not
 be patched silently.
@@ -15,20 +12,13 @@ import sys
 
 PATCHES = (
     (
-        "tab 0 -> NearbyStopFragment",
-        "    invoke-static {}, Lkz/onay/ui/routes2/frontscreen/RoutesFragment;->newInstance()"
-        "Lkz/onay/ui/routes2/frontscreen/RoutesFragment;\n",
+        "tab 2 (Life) -> NearbyStopFragment",
+        "    invoke-static {}, Lkz/onay/ui/main/life/LifeFragment;->newInstance()"
+        "Lkz/onay/ui/main/life/LifeFragment;\n",
         "    const/4 v0, 0x0\n"
         "\n"
         "    invoke-static {v0}, Lkz/onay/nearby/ui/NearbyStopFragment;->newInstance(Landroid/os/Bundle;)"
         "Lkz/onay/nearby/ui/NearbyStopFragment;\n",
-    ),
-    (
-        "tab 2 (Life) -> ProfileFragment (same as Cards)",
-        "    invoke-static {}, Lkz/onay/ui/main/life/LifeFragment;->newInstance()"
-        "Lkz/onay/ui/main/life/LifeFragment;\n",
-        "    invoke-static {}, Lkz/onay/ui/main/profile/ProfileFragment;->newInstance()"
-        "Lkz/onay/ui/main/profile/ProfileFragment;\n",
     ),
 )
 
