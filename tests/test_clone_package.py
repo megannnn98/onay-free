@@ -99,11 +99,13 @@ class CloneManifestTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sharedUserId"):
             change_manifest(self.path)
 
-    def test_rejects_duplicate_authorities(self):
+    def test_preserves_preexisting_duplicate_authorities(self):
         self.path.write_text(SOURCE.replace('android:authorities="com.someone.shared"',
                                              'android:authorities="kz.onay.sync"'))
-        with self.assertRaisesRegex(ValueError, "duplicate provider authority"):
-            change_manifest(self.path)
+        change_manifest(self.path)
+        providers = self.root().find("application").findall("provider")
+        self.assertIn("kz.onay.free.sync", providers[0].get(A("authorities")))
+        self.assertEqual(providers[2].get(A("authorities")), "kz.onay.free.sync")
 
     def test_rejects_unsafe_destination(self):
         with self.assertRaisesRegex(ValueError, "unsafe"):
