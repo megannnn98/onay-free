@@ -6,6 +6,8 @@ on:
     paths:
       - "scripts/build_universal_apk.sh"
       - "scripts/verify_universal_apk.sh"
+      - "scripts/patch_clone_manifest.py"
+      - "scripts/verify_clone_payload.py"
       - "tests/**"
       - "docs/release-notes-template.md"
       - ".github/workflows/publish-single-apk.yml"
