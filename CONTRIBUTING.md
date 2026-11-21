@@ -22,5 +22,13 @@ bash scripts/mutation_check.sh                # каждый мутант дол
 См. раздел «Выпуск версии» в `README.md` и `docs/PATCHES.md`. Релиз публикуется только после проверки APK `scripts/verify_universal_apk.sh` и установки на устройство; до проверки выпуск помечается как pre-release.
 
 ## Настройки репозитория
-Применено: squash-слияние, автоудаление веток после слияния, обновление ветки PR, оповещения Dependabot, Dependabot для GitHub Actions, действия в workflow закреплены по SHA.
-Недоступно на бесплатном плане для приватного репозитория: защита ветки/rulesets, code scanning (CodeQL), secret scanning. Если репозиторий станет публичным или будет план с этими функциями, включите: защиту `master` (обязательный PR и проверки `Scripts and packaging tests`, `JVM unit tests and mutation check`, запрет force-push), secret scanning с push protection, CodeQL и OpenSSF Scorecard.
+Репозиторий публичный. Включено:
+- защита `master`: обязательны проверки `Scripts and packaging tests` и `JVM unit tests and mutation check`, линейная история, запрет force-push и удаления ветки, решённые обсуждения (отдельное ревью не требуется, защита не распространяется на владельца);
+- squash-слияние, автоудаление веток после слияния, обновление ветки PR;
+- secret scanning с push protection, оповещения и автоисправления Dependabot, Dependabot для GitHub Actions, CodeQL (стандартная настройка: Java, Python, Actions);
+- приватные сообщения об уязвимостях (вкладка Security → Report a vulnerability);
+- действия в workflow закреплены по SHA (проверяет тест).
+Не включено: OpenSSF Scorecard (по желанию отдельным workflow).
+
+## Что публично
+В репозитории нет ключей, паролей и APK исходного приложения (`.gitignore`). Файлы APK в релизах содержат изменённое приложение ONAY! целиком, которое принадлежит его правообладателю: используйте на свой риск.
