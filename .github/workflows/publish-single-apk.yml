@@ -16,12 +16,12 @@ on:
       tag:
         description: "New release tag (for example v0.0.2)"
         required: true
-        default: "v0.0.2"
+        default: "v0.0.5"
         type: string
       source_tag:
-        description: "Existing release with the signed .apks archive"
+        description: "Source release: latest single .apk preferred, otherwise signed .apks"
         required: true
-        default: "v0.0.1"
+        default: "v0.0.4"
         type: string
       new_signing_key:
         description: "Explicitly allow a NEW certificate ONLY for independent package kz.onay.free"
@@ -115,20 +115,25 @@ jobs:
           echo "66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa  $RUNNER_TEMP/apktool.jar" | sha256sum -c -
           echo "APKTOOL_JAR=$RUNNER_TEMP/apktool.jar" >> "$GITHUB_ENV"
 
-      - name: Download previously signed split archive
+      - name: Download previously released APK or split archive
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_TAG: ${{ inputs.source_tag }}
         run: |
           set -euo pipefail
           mkdir -p work/input
-          gh release download "$SOURCE_TAG" --pattern '*.apks' --dir work/input
+          gh release download "$SOURCE_TAG" --pattern '*.apk' --pattern '*.apks' --dir work/input
+          mapfile -t apks < <(find work/input -maxdepth 1 -type f -name '*.apk' -print)
           mapfile -t archives < <(find work/input -maxdepth 1 -type f -name '*.apks' -print)
-          [ "${#archives[@]}" -eq 1 ] || {
-            echo "::error::Expected exactly one .apks archive in source release"
+          if [ "${#apks[@]}" -eq 1 ]; then
+            source_file="${apks[0]}"
+          elif [ "${#apks[@]}" -eq 0 ] && [ "${#archives[@]}" -eq 1 ]; then
+            source_file="${archives[0]}"
+          else
+            echo "::error::Expected one APK or one .apks in source release"
             exit 1
-          }
-          echo "SPLITS_ARCHIVE=${archives[0]}" >> "$GITHUB_ENV"
+          fi
+          echo "SPLITS_ARCHIVE=$source_file" >> "$GITHUB_ENV"
 
       - name: Rebuild and sign one APK
         env:
@@ -155,8 +160,13 @@ jobs:
           NEW_KEY: ${{ inputs.new_signing_key }}
         run: |
           set -euo pipefail
-          unzip -p "$SPLITS_ARCHIVE" base.apk > "$RUNNER_TEMP/onay/base.apk"
-          src="$(apksigner verify --print-certs "$RUNNER_TEMP/onay/base.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+          if [[ "$SPLITS_ARCHIVE" == *.apks ]]; then
+            unzip -p "$SPLITS_ARCHIVE" base.apk > "$RUNNER_TEMP/onay/base.apk"
+            source_apk="$RUNNER_TEMP/onay/base.apk"
+          else
+            source_apk="$SPLITS_ARCHIVE"
+          fi
+          src="$(apksigner verify --print-certs "$source_apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
           [ -n "$src" ] || { echo "::error::Cannot read the certificate of the source release"; exit 1; }
           apk="work/release/onay-free-${TAG#v}.apk"
           if [ "$NEW_KEY" = "true" ]; then
