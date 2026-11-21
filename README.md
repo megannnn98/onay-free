@@ -29,26 +29,52 @@
 
 ## Установка
 
-Сборка состоит из набора split-APK, одного файла нет. APK и ключ в репозиторий не входят.
+После сборки создаётся **один `work/release/onay-free.apk`**, который можно установить обычным нажатием на телефоне без SAI.
+
+Оригинальный ONAY! из Google Play нужно удалить (подписи отличаются). Для последующих обновлений модификации сохраняйте тот же keystore.
+
+```sh
+adb install -r work/release/onay-free.apk
+```
+
+Для диагностики сохраняется установка прежних split-APK:
 
 ```sh
 adb install-multiple work/out/*.apk
 ```
 
-Нужны `base.apk`, `split_config.arm64_v8a.apk` и dpi-файлы из `work/out/`. Одиночный `base.apk` не запустится.
-
 ## Сборка
 
-Нужны исходные split-APK ONAY! 3.6.5 в `work/apks/` и инструменты: `apktool`, `jadx`, `enjarify`, `apksigner`, `zipalign`, `adb`.
+Нужны исходные split-APK ONAY! 3.6.5 в `work/apks/` и инструменты: `apktool`, `jadx`, `enjarify`, `apksigner`, `zipalign`, `unzip`, `curl`, `java`, `adb`.
 
 ```sh
 scripts/prepare_classpath.sh      # один раз, около 6 минут
 scripts/build_dex.sh
-ONAY_KS=work/keys/test.jks ONAY_KS_PASS=<пароль> scripts/build_apk.sh
-scripts/install.sh
+ONAY_KS=work/keys/test.jks ONAY_KS_PASS='<пароль>' scripts/build_apk.sh
 ```
 
-Тестовый ключ создайте сами (`keytool`, alias `test`) и храните вне git. Каталог `work/` в `.gitignore`.
+`build_apk.sh` по умолчанию создаёт прежние split-APK в `work/out/`, а затем объединяет их с помощью **APKEditor 1.4.9**, выравнивает, подписывает тем же ключом и проверяет подпись и структуру APK. APKEditor скачивается в `work/tools/` с проверкой SHA-256. Результат: `work/release/onay-free.apk`.
+
+Чтобы оставить только прежние split-APK, задайте `ONAY_BUILD_UNIVERSAL=0`. Для собственного jar APKEditor можно указать `APKEDITOR_JAR`.
+
+Можно объединить уже собранные split-APK или существующий архив `.apks` без повторной декомпиляции:
+
+```sh
+ONAY_KS=work/keys/test.jks ONAY_KS_PASS='<пароль>' \
+  SPLITS_INPUT=work/out \
+  OUTPUT_APK=work/release/onay-free-0.0.1.apk \
+  bash scripts/build_universal_apk.sh
+```
+
+Для архива вместо `SPLITS_INPUT=work/out` укажите путь к `onay-free-0.0.1.apks`. Архив должен содержать один набор для ARM64. **Для подписи одиночного APK требуется keystore**, который в репозитории не хранится.
+
+Тесты упаковки (без Android SDK и исходных APK):
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+Перед публикацией APK необходимо установить на телефон и проверить запуск, «Рядом», карту, навигацию и авторизацию: тесты упаковки не проверяют работу ONAY! на устройстве.
 
 Отладочная Activity с тестовыми данными и подменой координаты собирается только при `ONAY_DEBUG_ACTIVITY=1`. В обычной сборке её нет.
 
