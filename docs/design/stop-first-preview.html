@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>ONAY Free — Stop-first UI prototype</title>
+  <style>
+    :root{font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:#15253e;background:#eef2f8}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh}
+    main{display:flex;align-items:center;justify-content:center;gap:50px;padding:32px 20px;min-height:100vh}
+    .intro{max-width:310px}
+    h1{font-size:30px;line-height:1.1;margin:0 0 15px;letter-spacing:-.7px}
+    p{color:#627084;font-size:15px;line-height:1.6;margin:12px 0}
+    .tag{display:inline-block;padding:6px 11px;font-size:12px;font-weight:750;color:#215fbc;background:#e1edff;border-radius:999px;margin-bottom:14px}
+    .device{position:relative;width:min(390px,100%);flex:0 0 auto;border-radius:30px;box-shadow:0 20px 60px #253c5940;overflow:hidden;border:5px solid #1e3147;line-height:0;user-select:none}
+    .device>img{display:block;width:100%;height:auto}
+    .hotspot{position:absolute;border:0;background:transparent;cursor:pointer;z-index:3;border-radius:12px}
+    .hotspot:focus-visible{outline:3px solid #2563eb;background:#2563eb20}
+    #stop-hotspot{left:5%;right:5%;top:7%;height:13%}
+    #route65{left:7%;width:19%;top:84%;height:8%}
+    #route79{left:29.4%;width:19%;top:84%;height:8%}
+    #route121{left:52%;width:19%;top:84%;height:8%}
+    #route12{left:74.2%;width:19%;top:84%;height:8%}
+    #map65{left:12%;top:33%;width:20%;height:10%}
+    #close-focus{left:80%;top:8%;width:17%;height:12%}
+    #reset-focus{left:5%;right:5%;top:93.5%;height:4%}
+    #stop-overlay{display:none;position:absolute;top:17%;left:4%;right:4%;border-radius:19px;background:#fff;box-shadow:0 12px 35px #071d3540;z-index:6;line-height:1.3;padding:16px}
+    #stop-overlay.open{display:block}
+    .sheet-title{font-weight:800;font-size:16px;margin:2px 0 14px}
+    .stop{width:100%;text-align:left;background:none;border:0;border-top:1px solid #e3e9f0;padding:13px 5px;display:flex;gap:10px;align-items:center;color:#1c2d46;font-size:14px;cursor:pointer}
+    .stop small{margin-left:auto;color:#64748b;white-space:nowrap}
+    .stop .dot{width:10px;height:10px;background:#2563eb;border-radius:50%}
+    .stop[aria-pressed="true"]{font-weight:800}
+    .caption{font-size:12px;color:#64748b;line-height:1.4;margin-top:10px}
+    .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}
+    .actions button{padding:11px 14px;border-radius:12px;font-size:14px;cursor:pointer;border:1px solid #d7e0ee;color:#1d3453;background:white;font-weight:650}
+    .actions button.primary{color:white;background:#2563eb;border-color:#2563eb}
+    .status{margin-top:16px;display:block;padding:12px 14px;background:white;border-radius:12px;color:#42516a;min-height:55px;font-size:13px;line-height:1.4}
+    .popover{position:absolute;bottom:21%;left:9%;right:9%;z-index:7;background:#fff;box-shadow:0 10px 26px #1b2c4640;border-radius:16px;padding:16px;display:none;line-height:1.4}
+    .popover.open{display:block}
+    .popover b{display:block;margin:0 0 6px}
+    .popover span{font-size:13px;color:#697586}
+    .popover button{border:0;background:#edf4ff;border-radius:8px;margin-top:10px;padding:9px 12px;color:#1a62cb;font-weight:750;cursor:pointer}
+    [hidden]{display:none!important}
+    @media(max-width:760px){main{flex-direction:column-reverse;gap:20px;padding:10px 10px 25px}.intro{max-width:min(390px,100%)}h1{font-size:23px}.tag{margin-bottom:7px}.device{width:min(390px,100%)}.intro p{font-size:13px;margin:6px 0}.actions{margin-top:10px}}
+  </style>
+</head>
+<body>
+<main>
+  <section class="intro" aria-label="Описание прототипа">
+    <span class="tag">Концепт · Issue #3</span>
+    <h1>ONAY Free<br>Автобусы у моей остановки</h1>
+    <p><strong>Главный объект — остановка. Главный экран — карта.</strong> На карте сразу видны автобусы только тех маршрутов, которые обслуживают выбранную остановку.</p>
+    <p>Нажмите на номер 65, чтобы выделить его автобусы. Нажмите на название остановки, чтобы переключить сторону дороги или выбрать другую.</p>
+    <div class="actions">
+      <button class="primary" id="all">Все автобусы</button>
+      <button id="focus">Маршрут 65</button>
+      <button id="pick">Сменить остановку</button>
+    </div>
+    <output class="status" id="status" aria-live="polite">Показаны все маршруты выбранной остановки. Это демонстрационные данные.</output>
+    <p class="caption">Рабочий Android-код не затронут. В прототипе нет живого API, достоверного ETA и авторизации.</p>
+  </section>
+  <div class="device" role="region" aria-label="Интерактивный экран телефона">
+    <img id="screen" src="stop-first-main.svg" alt="Карта транспорта для ближайшей остановки.">
+    <button id="stop-hotspot" class="hotspot" aria-label="Выбрать остановку"></button>
+    <button id="route65" class="hotspot route" data-route="65" aria-label="Показать автобусы 65"></button>
+    <button id="route79" class="hotspot route" data-route="79" aria-label="Показать автобусы 79"></button>
+    <button id="route121" class="hotspot route" data-route="121" aria-label="Показать автобусы 121"></button>
+    <button id="route12" class="hotspot route" data-route="12" aria-label="Показать автобусы 12"></button>
+    <button id="map65" class="hotspot" aria-label="Информация об автобусе на карте"></button>
+    <button id="close-focus" class="hotspot" aria-label="Сбросить фильтр маршрута" hidden></button>
+    <button id="reset-focus" class="hotspot" aria-label="Показать все маршруты" hidden></button>
+    <div id="stop-overlay" aria-label="Выбор остановки">
+      <div class="sheet-title">Выбрать остановку</div>
+      <button class="stop" data-stop="пр. Абая, 45" aria-pressed="true"><span class="dot"></span>пр. Абая, 45 <small>85 м · выбрана</small></button>
+      <button class="stop" data-stop="пр. Абая, противоположная сторона"><span class="dot"></span>Абая · другая сторона <small>130 м</small></button>
+      <button class="stop" data-stop="ул. Сатпаева"><span class="dot"></span>ул. Сатпаева <small>320 м</small></button>
+      <button class="stop" data-stop="ТД «Мега»"><span class="dot"></span>ТД «Мега» <small>540 м</small></button>
+      <button class="stop" id="cancel-stop">Отмена</button>
+    </div>
+    <div class="popover" id="vehicle" role="dialog" aria-label="Информация об автобусе">
+      <b>Автобус 65</b>
+      <span>На карте показана демонстрационная позиция. В реальной версии будет время последнего обновления.</span>
+      <button id="close-vehicle">Закрыть</button>
+    </div>
+  </div>
+</main>
+<script>
+(function(){
+  'use strict';
+  var focused=false, chosenStop='пр. Абая, 45';
+  var screen=document.getElementById('screen'), status=document.getElementById('status');
+  var choose=document.getElementById('stop-overlay'), vehicle=document.getElementById('vehicle');
+  var routeButtons=[].slice.call(document.querySelectorAll('.route'));
+  function message(s){status.textContent=s;}
+  function setFocus(on){
+    focused=on;
+    screen.src=on?'stop-first-route.svg':'stop-first-main.svg';
+    screen.alt=on?'На карте выделены автобусы маршрута 65.':'На карте отображаются маршруты выбранной остановки.';
+    routeButtons.forEach(function(b){b.hidden=on;});
+    document.getElementById('close-focus').hidden=!on;
+    document.getElementById('reset-focus').hidden=!on;
+    choose.classList.remove('open');vehicle.classList.remove('open');
+    message(on?'Маршрут 65 выделен. Камера остаётся рядом с выбранной остановкой.':'Все автобусы остановки: '+chosenStop+'.');
+  }
+  function openStops(){choose.classList.toggle('open');vehicle.classList.remove('open');}
+  document.getElementById('all').addEventListener('click',function(){setFocus(false);});
+  document.getElementById('focus').addEventListener('click',function(){setFocus(true);});
+  document.getElementById('pick').addEventListener('click',openStops);
+  document.getElementById('stop-hotspot').addEventListener('click',openStops);
+  document.getElementById('close-focus').addEventListener('click',function(){setFocus(false);});
+  document.getElementById('reset-focus').addEventListener('click',function(){setFocus(false);});
+  routeButtons.forEach(function(btn){
+    btn.addEventListener('click',function(){
+      if(btn.dataset.route==='65'){setFocus(true);return;}
+      message('Выбран маршрут '+btn.dataset.route+'. В прототипе детально отрисован только маршрут 65.');
+    });
+  });
+  document.getElementById('map65').addEventListener('click',function(){choose.classList.remove('open');vehicle.classList.toggle('open');});
+  document.getElementById('close-vehicle').addEventListener('click',function(){vehicle.classList.remove('open');});
+  document.querySelectorAll('[data-stop]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      chosenStop=btn.dataset.stop;
+      document.querySelectorAll('[data-stop]').forEach(function(other){other.setAttribute('aria-pressed',String(other===btn));});
+      choose.classList.remove('open');
+      setFocus(false);
+      message('Выбрана остановка «'+chosenStop+'». В Android-приложении карта и маршруты должны обновиться; здесь карта демонстрационная.');
+    });
+  });
+  document.getElementById('cancel-stop').addEventListener('click',function(){choose.classList.remove('open');});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'){choose.classList.remove('open');vehicle.classList.remove('open');}});
+}());
+</script>
+</body>
+</html>
