@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Merge the signed ONAY! split set into one installable APK and re-sign it.
-# May also be run against an existing .apks release archive.
+# Accepts legacy split directories/.apks and already merged .apk releases.
+# The latter is preferred to preserve recent modifications.
+# ONAY_PACKAGE_NAME=kz.onay.free creates an independently installable app.
+# ONAY_PACKAGE_NAME=kz.onay retains legacy behavior for forensic comparisons.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,6 +17,12 @@ EDITOR_SHA256="a9cd40df818845456be6d696de6110c89edf4b0a0580cb83438ed6b25a366e67"
 : "${ONAY_KS:?set ONAY_KS to the signing keystore path}"
 : "${ONAY_KS_PASS:?set ONAY_KS_PASS to the signing key password}"
 ALIAS="${ONAY_KS_ALIAS:-test}"
+APKTOOL_JAR="${APKTOOL_JAR:-}"
+ONAY_PACKAGE_NAME="${ONAY_PACKAGE_NAME:-kz.onay.free}"
+case "$ONAY_PACKAGE_NAME" in
+  kz.onay|kz.onay.free) ;;
+  *) echo "unsupported ONAY_PACKAGE_NAME: $ONAY_PACKAGE_NAME" >&2; exit 1 ;;
+esac
 
 for tool in java zipalign apksigner unzip; do
   command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 1; }
@@ -22,6 +31,7 @@ done
 
 # A directory contains already selected splits for one device, not all
 # configurations from a full bundletool output.
+SOURCE_SINGLE_APK=0
 if [ -d "$SPLITS_INPUT" ]; then
   [ -f "$SPLITS_INPUT/base.apk" ] || { echo "missing base.apk in $SPLITS_INPUT" >&2; exit 1; }
   [ -f "$SPLITS_INPUT/split_config.arm64_v8a.apk" ] || {
@@ -33,13 +43,23 @@ elif [ -f "$SPLITS_INPUT" ] && [[ "$SPLITS_INPUT" == *.apks ]]; then
   grep -qx 'split_config.arm64_v8a.apk' <<<"$listing" || {
     echo "archive has no arm64 split" >&2; exit 1;
   }
+elif [ -f "$SPLITS_INPUT" ] && [[ "$SPLITS_INPUT" == *.apk ]]; then
+  SOURCE_SINGLE_APK=1
+  unzip -tqq "$SPLITS_INPUT" || { echo "invalid source APK" >&2; exit 1; }
+  listing="$(unzip -Z1 "$SPLITS_INPUT")"
+  grep -qx 'AndroidManifest.xml' <<<"$listing" || { echo "source APK has no manifest" >&2; exit 1; }
+  grep -Eq '^lib/arm64-v8a/[^/]+\.so$' <<<"$listing" || {
+    echo "source APK has no arm64 libraries" >&2; exit 1;
+  }
 else
-  echo "SPLITS_INPUT must be a split directory or .apks archive: $SPLITS_INPUT" >&2
+  echo "SPLITS_INPUT must be a split directory, .apks archive, or merged .apk: $SPLITS_INPUT" >&2
   exit 1
 fi
 
 # Only one ABI should be packaged. Other architectures require a separate build.
-if [ -d "$SPLITS_INPUT" ]; then
+if [ "$SOURCE_SINGLE_APK" = "1" ]; then
+  abi_splits=(split_config.arm64_v8a.apk)
+elif [ -d "$SPLITS_INPUT" ]; then
   mapfile -t abi_splits < <(find "$SPLITS_INPUT" -maxdepth 1 -type f -name 'split_config.*.apk' -printf '%f\n' \
     | grep -E '^split_config\.(arm64_v8a|armeabi_v7a|x86|x86_64)\.apk$' || true)
 else
@@ -51,6 +71,7 @@ if [ "${#abi_splits[@]}" -ne 1 ] || [ "${abi_splits[0]}" != split_config.arm64_v
   exit 1
 fi
 
+if [ "$SOURCE_SINGLE_APK" = "0" ]; then
 if [ ! -f "$APKEDITOR_JAR" ]; then
   if [ "$APKEDITOR_JAR" != "$DEFAULT_EDITOR" ]; then
     echo "missing APKEditor jar: $APKEDITOR_JAR" >&2
@@ -71,17 +92,55 @@ if [ "$APKEDITOR_JAR" = "$DEFAULT_EDITOR" ]; then
   actual="$(sha256sum "$APKEDITOR_JAR" | cut -d' ' -f1)"
   [ "$actual" = "$EDITOR_SHA256" ] || { echo "APKEditor sha256 mismatch" >&2; exit 1; }
 fi
+fi
 
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 
-echo "[1/4] merge split APKs"
-java -Xmx6g -jar "$APKEDITOR_JAR" m -i "$SPLITS_INPUT" \
-  -o "$work/merged-unsigned.apk" -validate-modules -clean-meta
-[ -s "$work/merged-unsigned.apk" ] || { echo "APKEditor produced no APK" >&2; exit 1; }
+if [ "$SOURCE_SINGLE_APK" = "1" ]; then
+  echo "[1/4] use existing merged APK (preserves latest code)"
+  cp "$SPLITS_INPUT" "$work/merged-unsigned.apk"
+else
+  echo "[1/4] merge split APKs"
+  java -Xmx6g -jar "$APKEDITOR_JAR" m -i "$SPLITS_INPUT" \
+    -o "$work/merged-unsigned.apk" -validate-modules -clean-meta
+  [ -s "$work/merged-unsigned.apk" ] || { echo "APKEditor produced no APK" >&2; exit 1; }
+fi
+
+# Only the *merged standalone APK* changes package identity. Existing split
+# APKs are intentionally kept as legacy kz.onay; the OS never sees them.
+unsigned="$work/merged-unsigned.apk"
+if [ "$ONAY_PACKAGE_NAME" = "kz.onay.free" ]; then
+  echo "[identity] preserve DEX namespace; rebase manifest package after split merge"
+  [ -n "$APKTOOL_JAR" ] || command -v apktool >/dev/null || {
+    echo "clone build needs apktool or APKTOOL_JAR" >&2; exit 1;
+  }
+  command -v aapt2 >/dev/null || { echo "clone build needs aapt2" >&2; exit 1; }
+  command -v python3 >/dev/null || { echo "clone build needs python3" >&2; exit 1; }
+  run_apktool() {
+    if [ -n "$APKTOOL_JAR" ]; then
+      java -Xmx6g -jar "$APKTOOL_JAR" "$@"
+    else
+      apktool -JXmx6g "$@"
+    fi
+  }
+  # -s keeps original DEX; apktool decodes the manifest only if -r is NOT used.
+  # apktool may recompile resources. Never ship these: transplant its *compiled*
+  # manifest back into the original APK to preserve all other payload bytes.
+  run_apktool d -f -s -o "$work/decoded" "$unsigned"
+  python3 -I "$ROOT/scripts/patch_clone_manifest.py" "$work/decoded/AndroidManifest.xml"
+  run_apktool b -f -o "$work/clone-rebuilt.apk" "$work/decoded"
+  python3 -I "$ROOT/scripts/replace_compiled_manifest.py" "$unsigned" "$work/clone-rebuilt.apk" "$work/cloned-unsigned.apk"
+  python3 -I "$ROOT/scripts/verify_clone_payload.py" "$unsigned" "$work/cloned-unsigned.apk"
+  unsigned="$work/cloned-unsigned.apk"
+  actual_package="$(aapt2 dump badging "$unsigned" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1)"
+  [ "$actual_package" = "$ONAY_PACKAGE_NAME" ] || {
+    echo "clone built as $actual_package, expected $ONAY_PACKAGE_NAME" >&2; exit 1;
+  }
+fi
 
 echo "[2/4] align"
-zipalign -f -p 4 "$work/merged-unsigned.apk" "$work/aligned.apk"
+zipalign -f -p 4 "$unsigned" "$work/aligned.apk"
 zipalign -c -p 4 "$work/aligned.apk"
 
 echo "[3/4] sign with the same key as the split build"

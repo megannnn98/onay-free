@@ -19,7 +19,7 @@ AAPT2 = '''#!/usr/bin/env python3
 import os, sys
 args = sys.argv[1:]
 if args[:2] == ['dump', 'badging']:
-    print("package: name='%s' versionCode='23310' versionName='3.6.5'" % os.environ.get('MOCK_PACKAGE', 'kz.onay'))
+    print("package: name='%s' versionCode='23310' versionName='3.6.5'" % os.environ.get('MOCK_PACKAGE', 'kz.onay.free'))
     print("native-code: '%s'" % os.environ.get('MOCK_ABI', 'arm64-v8a'))
 elif args[:2] == ['dump', 'xmltree']:
     print('A: http://schemas.android.com/apk/res/android:extractNativeLibs(0x010104ea)=false')

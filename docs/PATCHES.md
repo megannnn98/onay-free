@@ -46,3 +46,14 @@
 - Room: `stopDao().getListRx()`, `localizationDao().getList("Stop", id)`.
 - gRPC и protobuf: `stop.StopServiceGrpc`, `route.RouteServiceGrpc`, `position.PositionServiceGrpc`, их `OuterClass` и сообщения (имена вложенных классов через `$`).
 - `kz.onay.ui.routes2.shared.MyLocationRequestHelper` (`getLocation()`).
+
+
+## Отличие самостоятельного APK от прежних split-APK
+
+После объединения split-ов в единый APK `scripts/build_universal_apk.sh` по умолчанию переупаковывает только **установочный идентификатор** из `kz.onay` в `kz.onay.free` с помощью `scripts/patch_clone_manifest.py`.
+
+- В манифесте исходные относительные Java-компоненты (`.OnayApp`, `.ui.*`) разворачиваются до абсолютных имён в `kz.onay.*`.
+- Собственные provider authorities, custom permissions, process/task affinities переводятся на независимый пакет, чтобы не конфликтовать с ONAY! из Play.
+- Итоговый APK сохраняет побайтово DEX, `resources.arsc`, ресурсы, assets и native-библиотеки. Apktool компилирует новый бинарный манифест, но в исходный APK переносится **только** `AndroidManifest.xml` (`replace_compiled_manifest.py`). Сохранность файлов проверяет `scripts/verify_clone_payload.py`.
+- `work/out/*.apk` по-прежнему содержит старый пакет `kz.onay` и **не предназначен для одновременной установки с официальным ONAY!**.
+- Не все пакетно-зависимые сторонние интеграции можно исправить переименованием манифеста; обязательны реальные проверки из [CLONE_COMPATIBILITY.md](CLONE_COMPATIBILITY.md).

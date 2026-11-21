@@ -72,7 +72,7 @@ class WorkflowSecurityTest(unittest.TestCase):
         self.assertRegex(publish_job_text(), r'uses: actions/checkout@[0-9a-f]{40}[^\n]*\s+with:\s+persist-credentials: false')
 
     def test_signing_key_is_removed_even_when_a_step_fails(self):
-        text = step('Remove the signing key from the runner')
+        text = step('Remove signing artifacts from runner')
         self.assertIn('if: always()', text)
         self.assertIn('signing.jks', text)
 
@@ -82,10 +82,15 @@ class WorkflowSecurityTest(unittest.TestCase):
         self.assertIn('if: ${{ !inputs.dry_run }}', step('Prepare release notes'))
         self.assertIn('if: ${{ inputs.dry_run }}', step('Keep the APK as a short-lived artifact'))
 
-    def test_certificate_of_the_source_release_must_match(self):
-        text = step('Verify packaging and that the signing certificate matches the original release')
-        self.assertIn('verify_universal_apk.sh "$apk" "$src"', text)
+    def test_new_certificate_only_with_explicit_standalone_package_mode(self):
+        text = step('Verify packaging and enforce explicit certificate policy')
         self.assertIn('[ -n "$src" ]', text)
+        self.assertIn('if [ "$NEW_KEY" = "true" ]', text)
+        self.assertIn('EXPECTED_PACKAGE=kz.onay.free bash scripts/verify_universal_apk.sh "$apk" |', text)
+        self.assertIn('EXPECTED_PACKAGE=kz.onay.free bash scripts/verify_universal_apk.sh "$apk" "$src"', text)
+        self.assertIn('ONAY_PACKAGE_NAME: kz.onay.free', WORKFLOW)
+        self.assertIn('new_signing_key:', WORKFLOW)
+        self.assertIn('default: false', WORKFLOW)
 
     def test_release_and_source_tags_are_validated(self):
         text = step('Check release tag and target')
