@@ -48,7 +48,15 @@ elif [ -f "$SPLITS_INPUT" ] && [[ "$SPLITS_INPUT" == *.apk ]]; then
   unzip -tqq "$SPLITS_INPUT" || { echo "invalid source APK" >&2; exit 1; }
   listing="$(unzip -Z1 "$SPLITS_INPUT")"
   grep -qx 'AndroidManifest.xml' <<<"$listing" || { echo "source APK has no manifest" >&2; exit 1; }
-  grep -Eq '^lib/arm64-v8a/[^/]+\.so Other architectures require a separate build.
+  grep -Eq '^lib/arm64-v8a/[^/]+\.so$' <<<"$listing" || {
+    echo "source APK has no arm64 libraries" >&2; exit 1;
+  }
+else
+  echo "SPLITS_INPUT must be a split directory, .apks archive, or merged .apk: $SPLITS_INPUT" >&2
+  exit 1
+fi
+
+# Only one ABI should be packaged. Other architectures require a separate build.
 if [ "$SOURCE_SINGLE_APK" = "1" ]; then
   abi_splits=(split_config.arm64_v8a.apk)
 elif [ -d "$SPLITS_INPUT" ]; then
