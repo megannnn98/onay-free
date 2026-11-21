@@ -63,6 +63,7 @@ if [ "${#abi_splits[@]}" -ne 1 ] || [ "${abi_splits[0]}" != split_config.arm64_v
   exit 1
 fi
 
+if [ "$SOURCE_SINGLE_APK" = "0" ]; then
 if [ ! -f "$APKEDITOR_JAR" ]; then
   if [ "$APKEDITOR_JAR" != "$DEFAULT_EDITOR" ]; then
     echo "missing APKEditor jar: $APKEDITOR_JAR" >&2
@@ -82,6 +83,7 @@ fi
 if [ "$APKEDITOR_JAR" = "$DEFAULT_EDITOR" ]; then
   actual="$(sha256sum "$APKEDITOR_JAR" | cut -d' ' -f1)"
   [ "$actual" = "$EDITOR_SHA256" ] || { echo "APKEditor sha256 mismatch" >&2; exit 1; }
+fi
 fi
 
 work="$(mktemp -d)"
