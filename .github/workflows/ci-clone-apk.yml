@@ -74,3 +74,12 @@ jobs:
           bash scripts/build_universal_apk.sh
           bash scripts/verify_universal_apk.sh work/clone/onay-free-ci.apk
           echo "CI clone build: correct package and signed APK; NOT a real-device test." >> "$GITHUB_STEP_SUMMARY"
+          echo "QA artifact is signed with a disposable test key. It CANNOT be upgraded to the release-key APK; uninstall it after testing." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attach short-lived QA APK (disposable signing key)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: onay-free-coinstall-QA-DO-NOT-DISTRIBUTE
+          path: work/clone/onay-free-ci.apk
+          retention-days: 1
+          if-no-files-found: error
