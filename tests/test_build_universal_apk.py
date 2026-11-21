@@ -130,15 +130,17 @@ class UniversalApkTest(unittest.TestCase):
             self.assertIn('package="kz.onay.free"', manifest)
             self.assertIn('kz.onay.OnayApp', manifest)
         calls = self.log.read_text()
-        self.assertIn('apktool d ', calls)
-        self.assertIn('apktool b ', calls)
+        self.assertIn('apktool -JXmx6g d ', calls)
+        self.assertIn('apktool -JXmx6g b ', calls)
         self.assertIn('aapt2 dump badging ', calls)
 
-    def test_clone_rejects_changed_dex(self):
+    def test_apktool_dex_mutation_is_not_shipped(self):
+        # Manifest-only transplant intentionally discards *everything* except
+        # apktool's compiled manifest, even if apktool rewrote classes.dex.
         result = self.run_build(ONAY_PACKAGE_NAME='kz.onay.free', MOCK_CLONE_CORRUPT='1')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('changed payload: classes.dex', result.stderr)
-        self.assertFalse(self.output.exists())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(self.output) as apk:
+            self.assertEqual(apk.read('classes.dex'), b'fake')
 
     def test_clone_rejects_unexpected_installed_package(self):
         result = self.run_build(ONAY_PACKAGE_NAME='kz.onay.free', MOCK_WRONG_PACKAGE='1')
