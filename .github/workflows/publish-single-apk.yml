@@ -8,6 +8,7 @@ on:
       - "scripts/verify_universal_apk.sh"
       - "scripts/patch_clone_manifest.py"
       - "scripts/verify_clone_payload.py"
+      - "scripts/replace_compiled_manifest.py"
       - "tests/**"
       - "docs/release-notes-template.md"
       - ".github/workflows/publish-single-apk.yml"
