@@ -67,7 +67,7 @@ def change_manifest(path: Path, old: str = OLD, new: str = NEW) -> dict[str, int
     root.set("package", new)
     application.set(A("label"), "ONAY Free")
 
-    authorities_seen = set()
+    authorities_seen = {}
     for el in root.iter():
         tag = el.tag.rsplit("}", 1)[-1]
         if tag in CLASS_TAGS:
@@ -101,9 +101,12 @@ def change_manifest(path: Path, old: str = OLD, new: str = NEW) -> dict[str, int
                     raise ValueError("empty provider authority")
                 updated = package_prefixed(authority, old, new)
                 stats["authorities_rebased"] += updated != authority
-                if updated in authorities_seen:
-                    raise ValueError("duplicate provider authority: " + updated)
-                authorities_seen.add(updated)
+                # Existing ONAY manifest can repeat one authority on multiple
+                # providers. Preserve such pre-existing duplicates. Reject only
+                # *new* collisions introduced by rebasing two different names.
+                if updated in authorities_seen and authorities_seen[updated] != authority:
+                    raise ValueError("new provider authority collision: " + updated)
+                authorities_seen[updated] = authority
                 rewritten.append(updated)
             el.set(A("authorities"), ";".join(rewritten))
 
