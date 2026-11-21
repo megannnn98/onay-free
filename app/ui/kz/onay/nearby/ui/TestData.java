@@ -97,8 +97,8 @@ final class TestData implements NearbyDataSource {
         l.add(new RouteLine(routeId, dir, la, ln));
     }
 
-    @Override
-    public double[] getUserLocation() {
+    /** Test-only: the pretend user position. The real screen gets it from GPS. */
+    double[] getUserLocation() {
         if (!hasLocation) {
             return null;
         }
@@ -108,6 +108,25 @@ final class TestData implements NearbyDataSource {
     @Override
     public List<StopPoint> getStops() {
         return stops;
+    }
+
+    @Override
+    public void prefetchNames(Collection<StopPoint> stops) {
+    }
+
+    @Override
+    public String getStopName(long stopId) {
+        for (StopPoint s : stops) {
+            if (s.getId() == stopId) {
+                return s.getName();
+            }
+        }
+        return "Остановка " + stopId;
+    }
+
+    @Override
+    public boolean hasRoutes() {
+        return true;
     }
 
     @Override

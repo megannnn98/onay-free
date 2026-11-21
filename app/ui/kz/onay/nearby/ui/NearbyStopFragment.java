@@ -1,6 +1,9 @@
 package kz.onay.nearby.ui;
 
+import android.Manifest;
 import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -8,12 +11,18 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.location.Location;
+import android.location.LocationManager;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import android.provider.Settings;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.style.RelativeSizeSpan;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -30,6 +39,7 @@ import com.google.android.gms.maps.CameraUpdate;
 import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.MapView;
+import com.google.android.gms.maps.model.BitmapDescriptor;
 import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.LatLngBounds;
@@ -43,6 +53,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import kz.onay.nearby.logic.Haversine;
+import kz.onay.nearby.logic.LocationQuality;
+import kz.onay.nearby.logic.NearbyCandidates;
 import kz.onay.nearby.logic.NearestStopFinder;
 import kz.onay.nearby.logic.RouteAtStop;
 import kz.onay.nearby.logic.RouteHighlightState;
@@ -51,17 +66,31 @@ import kz.onay.nearby.logic.RouteLine;
 import kz.onay.nearby.logic.RoutesAtStopSelector;
 import kz.onay.nearby.logic.StopMatch;
 import kz.onay.nearby.logic.StopPoint;
+import kz.onay.ui.routes2.shared.MyLocationRequestHelper;
 
 /**
  * "Рядом": the nearest stop, big route buttons and the routes of that stop on the map.
  * The view is built in code so that no resource ids have to be added to the app.
  * Route lines are added once per stop; selecting a route only changes colour, width and z-order.
+ * Database reads and stop searches run on a background thread; everything touching views runs on the main one.
  */
 public class NearbyStopFragment extends Fragment {
-    private static final String ARG_STATE = "state";
+    static final String ARG_STATE = "state";
+    static final String ARG_DATA = "data";
+    static final String ARG_LAT = "lat";
+    static final String ARG_LNG = "lng";
+
+    private static final String TAG = "NearbyStop";
     private static final String SAVED_MAP = "map";
+    private static final int REQ_LOCATION = 4711;
     private static final double SEARCH_RADIUS_METERS = 1000.0;
     private static final int NEARBY_LIMIT = 5;
+    private static final double ALTERNATIVE_EXTRA_METERS = 120.0;
+    private static final int ALTERNATIVE_LIMIT = 3;
+    private static final int PICK_LIMIT = 80;
+    private static final long LOCATION_TIMEOUT_MS = 15_000L;
+    private static final long LOCATION_POLL_MS = 400L;
+    private static final long MAX_FIX_AGE_MS = 120_000L;
     private static final int[] PALETTE = {
         0xFF1565C0, 0xFFC62828, 0xFF2E7D32, 0xFFEF6C00, 0xFF6A1B9A, 0xFF00838F, 0xFFAD1457, 0xFF4E342E
     };
@@ -75,13 +104,27 @@ public class NearbyStopFragment extends Fragment {
     private final Map<Marker, StopPoint> pickMarkers = new HashMap<>();
     private final Map<Long, List<RouteLine>> shownLines = new HashMap<>();
 
-    private NearbyDataSource data;
+    private ExecutorService executor;
+    private int generation;
+    private boolean testMode;
     private String forcedState;
+    private boolean permissionAsked;
+    private boolean recheckOnResume;
 
+    private NearbyDataSource data;
+    private List<StopPoint> allStops = Collections.emptyList();
+    private double[] userLoc;
+    private MyLocationRequestHelper locationHelper;
+    private long locationDeadline;
+
+    private View statusBar;
     private TextView titleView;
     private TextView subtitleView;
     private TextView statusView;
-    private Button retryButton;
+    private Button actionButton;
+    private Runnable action;
+    private HorizontalScrollView altScroll;
+    private LinearLayout altRow;
     private HorizontalScrollView chipScroll;
     private LinearLayout chipRow;
     private TextView directionView;
@@ -94,14 +137,12 @@ public class NearbyStopFragment extends Fragment {
     private boolean pickMode;
 
     private StopPoint selectedStop;
-    private double selectedDistance = -1;
+    private List<StopMatch> candidates = Collections.emptyList();
     private List<RouteAtStop> routes = Collections.emptyList();
 
-    public static NearbyStopFragment newInstance(@Nullable String forcedState) {
+    public static NearbyStopFragment newInstance(@Nullable Bundle args) {
         NearbyStopFragment f = new NearbyStopFragment();
-        Bundle b = new Bundle();
-        b.putString(ARG_STATE, forcedState);
-        f.setArguments(b);
+        f.setArguments(args == null ? new Bundle() : args);
         return f;
     }
 
@@ -110,8 +151,11 @@ public class NearbyStopFragment extends Fragment {
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container,
             @Nullable Bundle savedInstanceState) {
         Context c = requireContext();
-        forcedState = getArguments() == null ? null : getArguments().getString(ARG_STATE);
-        data = new TestData(forcedState);
+        Bundle args = getArguments() == null ? new Bundle() : getArguments();
+        forcedState = args.getString(ARG_STATE);
+        testMode = "test".equals(args.getString(ARG_DATA));
+        generation++;
+        executor = Executors.newSingleThreadExecutor();
 
         LinearLayout root = new LinearLayout(c);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -126,17 +170,30 @@ public class NearbyStopFragment extends Fragment {
         header.addView(subtitleView);
         root.addView(header);
 
+        altScroll = new HorizontalScrollView(c);
+        altScroll.setHorizontalScrollBarEnabled(false);
+        altRow = new LinearLayout(c);
+        altRow.setOrientation(LinearLayout.HORIZONTAL);
+        altRow.setPadding(dp(12), 0, dp(12), 0);
+        altScroll.addView(altRow);
+        altScroll.setVisibility(View.GONE);
+        root.addView(altScroll);
+
         LinearLayout status = new LinearLayout(c);
+        statusBar = status;
         status.setOrientation(LinearLayout.HORIZONTAL);
         status.setGravity(Gravity.CENTER_VERTICAL);
         status.setPadding(dp(16), dp(4), dp(16), dp(4));
         statusView = text(c, 15, false, 0xFF424242);
         statusView.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        retryButton = new Button(c);
-        retryButton.setText("Повторить");
-        retryButton.setOnClickListener(v -> start());
+        actionButton = new Button(c);
+        actionButton.setOnClickListener(v -> {
+            if (action != null) {
+                action.run();
+            }
+        });
         status.addView(statusView);
-        status.addView(retryButton);
+        status.addView(actionButton);
         root.addView(status);
 
         chipScroll = new HorizontalScrollView(c);
@@ -173,7 +230,7 @@ public class NearbyStopFragment extends Fragment {
         Bundle mapState = savedInstanceState == null ? null : savedInstanceState.getBundle(SAVED_MAP);
         mapView.onCreate(mapState);
         mapView.getMapAsync(this::onMapReady);
-        showStatus("Ищем ближайшую остановку…", false);
+        showStatus("Ищем ближайшую остановку…", null, null);
         return root;
     }
 
@@ -183,52 +240,241 @@ public class NearbyStopFragment extends Fragment {
         start();
     }
 
-    // ---------- loading ----------
+    // ---------- loading: stops, then location, then the nearest stop ----------
 
     private void start() {
         handler.removeCallbacksAndMessages(null);
-        showStatus("Ищем ближайшую остановку…", false);
-        handler.postDelayed(this::load, 400);
+        stopLocationWatch();
+        final int gen = generation;
+        leavePickState();
+        clearCandidates();
+        showStatus("Ищем ближайшую остановку…", null, null);
+        if (testMode) {
+            data = new TestData(forcedState);
+            handler.postDelayed(() -> {
+                if (gen != generation) {
+                    return;
+                }
+                if ("error".equals(forcedState)) {
+                    showStatus("Не удалось загрузить данные остановок", "Повторить", this::start);
+                    return;
+                }
+                allStops = data.getStops();
+                locate();
+            }, 400);
+            return;
+        }
+        executor.execute(() -> {
+            try {
+                AppDataSource src = AppDataSource.create();
+                List<StopPoint> stops = src.getStops();
+                Log.i(TAG, "stops loaded: " + stops.size());
+                post(gen, () -> onStopsLoaded(src, stops));
+            } catch (AppDataSource.Unavailable e) {
+                Log.w(TAG, "route component unavailable: " + e.getMessage());
+                post(gen, () -> showStatus("Город не выбран или данные транспорта ещё не готовы", "Повторить", this::start));
+            } catch (Exception e) {
+                Log.e(TAG, "stops load failed", e);
+                post(gen, () -> showStatus("Не удалось загрузить остановки", "Повторить", this::start));
+            }
+        });
     }
 
-    private void load() {
-        if (mapView == null) {
+    private void onStopsLoaded(AppDataSource src, List<StopPoint> stops) {
+        data = src;
+        allStops = stops;
+        if (stops.isEmpty()) {
+            showStatus("Остановки ещё не загружены. Откройте обычную карту транспорта и повторите.", "Повторить", this::start);
             return;
         }
-        if ("error".equals(forcedState)) {
-            showStatus("Не удалось загрузить данные остановок", true);
+        locate();
+    }
+
+    private void locate() {
+        Bundle args = getArguments();
+        double dbgLat = args == null ? Double.NaN : args.getDouble(ARG_LAT, Double.NaN);
+        double dbgLng = args == null ? Double.NaN : args.getDouble(ARG_LNG, Double.NaN);
+        if (!Double.isNaN(dbgLat) && !Double.isNaN(dbgLng)) {
+            Log.i(TAG, "using debug location override");
+            onLocation(dbgLat, dbgLng);
             return;
         }
-        double[] loc = data.getUserLocation();
-        if (loc == null) {
-            showStatus("Геолокация недоступна. Выберите остановку вручную.", false);
-            enterPickMode();
+        if (testMode) {
+            double[] u = ((TestData) data).getUserLocation();
+            if (u == null) {
+                noLocation("Геолокация недоступна. Выберите остановку вручную.", null, null);
+            } else {
+                onLocation(u[0], u[1]);
+            }
             return;
         }
-        List<StopPoint> stops = "empty".equals(forcedState)
-                ? Collections.<StopPoint>emptyList() : data.getStops();
-        List<StopMatch> near = NearestStopFinder.findNearby(stops, loc[0], loc[1], SEARCH_RADIUS_METERS, NEARBY_LIMIT);
+        if (!hasLocationPermission()) {
+            if (!permissionAsked) {
+                permissionAsked = true;
+                showStatus("Нужен доступ к геолокации", null, null);
+                requestPermissions(new String[] {
+                    Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_LOCATION);
+            } else {
+                showPermissionDenied();
+            }
+            return;
+        }
+        if (!isLocationEnabled()) {
+            recheckOnResume = true;
+            noLocation("Геолокация выключена. Включите её или выберите остановку вручную.", "Включить", () ->
+                    startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)));
+            return;
+        }
+        startLocationWatch();
+    }
+
+    private boolean hasLocationPermission() {
+        Context c = requireContext();
+        return c.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                || c.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean isLocationEnabled() {
+        LocationManager lm = (LocationManager) requireContext().getSystemService(Context.LOCATION_SERVICE);
+        return lm != null && (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
+                || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER));
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQ_LOCATION || mapView == null) {
+            return;
+        }
+        if (hasLocationPermission()) {
+            start();
+        } else {
+            showPermissionDenied();
+        }
+    }
+
+    private void showPermissionDenied() {
+        noLocation("Нет доступа к геолокации. Разрешите его или выберите остановку вручную.", "Разрешить", () -> {
+            if (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION)) {
+                requestPermissions(new String[] {
+                    Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_LOCATION);
+            } else {
+                recheckOnResume = true;
+                startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.fromParts("package", requireContext().getPackageName(), null)));
+            }
+        });
+    }
+
+    /** Shows why there is no position and lets the user pick a stop by hand. */
+    private void noLocation(String message, @Nullable String actionLabel, @Nullable Runnable onAction) {
+        showStatus(message, actionLabel, onAction);
+        enterPickMode();
+    }
+
+    /** Uses the app's own location helper; its state is read by polling, with a timeout. */
+    private void startLocationWatch() {
+        locationHelper = new MyLocationRequestHelper(requireActivity());
+        getViewLifecycleOwner().getLifecycle().addObserver(locationHelper);
+        locationDeadline = SystemClock.elapsedRealtime() + LOCATION_TIMEOUT_MS;
+        showStatus("Определяем местоположение…", null, null);
+        final int gen = generation;
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (gen != generation || locationHelper == null) {
+                    return;
+                }
+                Location loc = locationHelper.getLocation();
+                LocationQuality.Verdict v = loc == null ? LocationQuality.Verdict.MISSING
+                        : LocationQuality.classify(loc.getLatitude(), loc.getLongitude(), loc.getTime(),
+                                System.currentTimeMillis(), MAX_FIX_AGE_MS);
+                if (v == LocationQuality.Verdict.OK) {
+                    Log.i(TAG, "fix ok, accuracy " + loc.getAccuracy() + " m, age "
+                            + (System.currentTimeMillis() - loc.getTime()) + " ms");
+                    stopLocationWatch();
+                    onLocation(loc.getLatitude(), loc.getLongitude());
+                } else if (SystemClock.elapsedRealtime() > locationDeadline) {
+                    Log.w(TAG, "no usable fix: " + v);
+                    stopLocationWatch();
+                    noLocation(v == LocationQuality.Verdict.STALE
+                            ? "Координаты устарели, свежих нет. Повторите или выберите остановку вручную."
+                            : "Не удалось определить местоположение. Повторите или выберите остановку вручную.",
+                            "Повторить", NearbyStopFragment.this::start);
+                } else {
+                    handler.postDelayed(this, LOCATION_POLL_MS);
+                }
+            }
+        }, LOCATION_POLL_MS);
+    }
+
+    private void stopLocationWatch() {
+        if (locationHelper != null) {
+            if (mapView != null) {
+                getViewLifecycleOwner().getLifecycle().removeObserver(locationHelper);
+            }
+            locationHelper.stopUpdates();
+            locationHelper.release();
+            locationHelper = null;
+        }
+    }
+
+    private void onLocation(double lat, double lng) {
+        userLoc = new double[] {lat, lng};
+        final int gen = generation;
+        final List<StopPoint> stops = allStops;
+        final NearbyDataSource src = data;
+        executor.execute(() -> {
+            try {
+                List<StopMatch> near = NearestStopFinder.findNearby(stops, lat, lng, SEARCH_RADIUS_METERS, NEARBY_LIMIT);
+                List<StopPoint> forNames = new ArrayList<>();
+                for (StopMatch m : near) {
+                    forNames.add(m.getStop());
+                }
+                src.prefetchNames(forNames);
+                Log.i(TAG, "stops within " + (int) SEARCH_RADIUS_METERS + " m: " + near.size()
+                        + (near.isEmpty() ? "" : ", nearest " + Math.round(near.get(0).getDistanceMeters()) + " m"));
+                post(gen, () -> showNearby(near));
+            } catch (Exception e) {
+                Log.e(TAG, "nearest stop search failed", e);
+                post(gen, () -> showStatus("Не удалось найти остановки рядом", "Повторить", this::start));
+            }
+        });
+    }
+
+    private void showNearby(List<StopMatch> near) {
         if (near.isEmpty()) {
-            showStatus("Рядом нет остановок. Выберите остановку вручную.", false);
-            enterPickMode();
+            noLocation("Рядом нет остановок (радиус " + (int) SEARCH_RADIUS_METERS + " м). Выберите остановку вручную.", null, null);
             return;
         }
-        statusView.setText("");
-        ((View) statusView.getParent()).setVisibility(View.GONE);
+        statusBar.setVisibility(View.GONE);
+        List<StopMatch> shown = new ArrayList<>();
+        shown.add(near.get(0));
+        shown.addAll(NearbyCandidates.alternatives(near, ALTERNATIVE_EXTRA_METERS, ALTERNATIVE_LIMIT));
+        candidates = shown;
         showStop(near.get(0).getStop(), near.get(0).getDistanceMeters());
     }
 
-    private void showStatus(String message, boolean withRetry) {
-        ((View) statusView.getParent()).setVisibility(View.VISIBLE);
+    private void post(int gen, Runnable r) {
+        handler.post(() -> {
+            if (gen == generation && mapView != null) {
+                r.run();
+            }
+        });
+    }
+
+    private void showStatus(String message, @Nullable String actionLabel, @Nullable Runnable onAction) {
+        statusBar.setVisibility(View.VISIBLE);
         statusView.setText(message);
-        retryButton.setVisibility(withRetry ? View.VISIBLE : View.GONE);
+        action = onAction;
+        actionButton.setText(actionLabel);
+        actionButton.setVisibility(actionLabel == null ? View.GONE : View.VISIBLE);
     }
 
     // ---------- stop and routes ----------
 
     private void showStop(StopPoint stop, double distanceMeters) {
         selectedStop = stop;
-        selectedDistance = distanceMeters;
         routes = RoutesAtStopSelector.select(stop.getId(), data.getRouteIdsAtStop(stop.getId()), data.getRoutes());
         List<Long> ids = new ArrayList<>();
         colorIndex.clear();
@@ -237,16 +483,47 @@ public class NearbyStopFragment extends Fragment {
             ids.add(r.getRouteId());
         }
         highlight.retainOnly(ids);
-        titleView.setText(stop.getName());
+        titleView.setText(data.getStopName(stop.getId()));
         StringBuilder sub = new StringBuilder();
         if (distanceMeters >= 0) {
             sub.append(String.format(Locale.US, "%d м от вас · ", Math.round(distanceMeters)));
         }
-        sub.append("маршрутов: ").append(routes.size());
+        sub.append(data.hasRoutes() ? "маршрутов: " + routes.size() : "маршруты пока не подключены");
         subtitleView.setText(sub);
+        buildCandidateButtons();
         buildChips();
         drawStop();
         refreshHighlight(false);
+    }
+
+    /** Buttons for the other stops standing almost as close, typically the opposite side of the road. */
+    private void buildCandidateButtons() {
+        altRow.removeAllViews();
+        Context c = requireContext();
+        int shown = 0;
+        for (StopMatch m : candidates) {
+            if (selectedStop != null && m.getStop().getId() == selectedStop.getId()) {
+                continue;
+            }
+            Button b = new Button(c);
+            b.setAllCaps(false);
+            b.setText(String.format(Locale.US, "%s · %d м", data.getStopName(m.getStop().getId()),
+                    Math.round(m.getDistanceMeters())));
+            final StopMatch match = m;
+            b.setOnClickListener(v -> {
+                highlight.clear();
+                showStop(match.getStop(), match.getDistanceMeters());
+            });
+            altRow.addView(b);
+            shown++;
+        }
+        altScroll.setVisibility(shown > 0 ? View.VISIBLE : View.GONE);
+    }
+
+    private void clearCandidates() {
+        candidates = Collections.emptyList();
+        altRow.removeAllViews();
+        altScroll.setVisibility(View.GONE);
     }
 
     private void buildChips() {
@@ -385,11 +662,11 @@ public class NearbyStopFragment extends Fragment {
             }
             return false;
         });
-        if (selectedStop != null) {
+        if (pickMode) {
+            showPickMarkers();
+        } else if (selectedStop != null) {
             drawStop();
             refreshHighlight(false);
-        } else if (pickMode) {
-            showPickMarkers();
         }
     }
 
@@ -398,19 +675,16 @@ public class NearbyStopFragment extends Fragment {
         if (map == null || selectedStop == null) {
             return;
         }
+        map.setOnCameraIdleListener(null);
         map.clear();
         polylines.clear();
         arrows.clear();
         shownLines.clear();
         pickMarkers.clear();
-        double[] loc = data.getUserLocation();
-        if (loc != null) {
-            map.addMarker(new MarkerOptions().position(new LatLng(loc[0], loc[1])).title("Вы здесь")
-                    .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)).zIndex(5f));
-        }
+        addUserMarker();
         map.addMarker(new MarkerOptions().position(new LatLng(selectedStop.getLat(), selectedStop.getLng()))
-                .title(selectedStop.getName()).zIndex(6f));
-        Map<Integer, com.google.android.gms.maps.model.BitmapDescriptor> arrowIcons = new HashMap<>();
+                .title(data.getStopName(selectedStop.getId())).zIndex(6f));
+        Map<Integer, BitmapDescriptor> arrowIcons = new HashMap<>();
         for (RouteAtStop r : routes) {
             long id = r.getRouteId();
             int color = colorOf(id);
@@ -427,7 +701,7 @@ public class NearbyStopFragment extends Fragment {
                     po.add(new LatLng(line.getLat(i), line.getLng(i)));
                 }
                 pl.add(map.addPolyline(po));
-                com.google.android.gms.maps.model.BitmapDescriptor icon = arrowIcons.get(color);
+                BitmapDescriptor icon = arrowIcons.get(color);
                 if (icon == null) {
                     icon = BitmapDescriptorFactory.fromBitmap(arrowBitmap(color));
                     arrowIcons.put(color, icon);
@@ -446,6 +720,13 @@ public class NearbyStopFragment extends Fragment {
         fitCamera(null);
     }
 
+    private void addUserMarker() {
+        if (map != null && userLoc != null) {
+            map.addMarker(new MarkerOptions().position(new LatLng(userLoc[0], userLoc[1])).title("Вы здесь")
+                    .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)).zIndex(5f));
+        }
+    }
+
     private void fitCamera(@Nullable Long routeId) {
         if (map == null || selectedStop == null) {
             return;
@@ -453,9 +734,8 @@ public class NearbyStopFragment extends Fragment {
         // 'var': the compile-only classpath has no InnerClasses attribute, so LatLngBounds.Builder cannot be named
         var b = LatLngBounds.builder();
         b.include(new LatLng(selectedStop.getLat(), selectedStop.getLng()));
-        double[] loc = data.getUserLocation();
-        if (loc != null) {
-            b.include(new LatLng(loc[0], loc[1]));
+        if (userLoc != null) {
+            b.include(new LatLng(userLoc[0], userLoc[1]));
         }
         for (Map.Entry<Long, List<RouteLine>> e : shownLines.entrySet()) {
             if (routeId != null && !routeId.equals(e.getKey())) {
@@ -467,9 +747,16 @@ public class NearbyStopFragment extends Fragment {
                 }
             }
         }
-        CameraUpdate u = CameraUpdateFactory.newLatLngBounds(b.build(), dp(48));
+        moveTo(CameraUpdateFactory.newLatLngBounds(b.build(), dp(48)), true);
+    }
+
+    private void moveTo(CameraUpdate u, boolean animate) {
         if (mapLoaded) {
-            map.animateCamera(u);
+            if (animate) {
+                map.animateCamera(u);
+            } else {
+                map.moveCamera(u);
+            }
         } else {
             pendingCamera = u;
         }
@@ -507,16 +794,27 @@ public class NearbyStopFragment extends Fragment {
     }
 
     private void enterPickMode() {
+        if (allStops.isEmpty()) {
+            return;
+        }
         pickMode = true;
         pickHint.setVisibility(View.VISIBLE);
         changeStopButton.setText("Отмена");
         showPickMarkers();
     }
 
-    private void exitPickMode() {
+    /** Leaves manual selection without touching the map content. */
+    private void leavePickState() {
         pickMode = false;
         pickHint.setVisibility(View.GONE);
         changeStopButton.setText("Сменить остановку");
+        if (map != null) {
+            map.setOnCameraIdleListener(null);
+        }
+    }
+
+    private void exitPickMode() {
+        leavePickState();
         if (selectedStop != null) {
             drawStop();
             refreshHighlight(false);
@@ -525,50 +823,85 @@ public class NearbyStopFragment extends Fragment {
         }
     }
 
+    /** Puts the camera near the user (or the middle of all stops) and keeps markers for the stops in view. */
     private void showPickMarkers() {
         if (map == null) {
             return;
         }
+        LatLng target = userLoc != null ? new LatLng(userLoc[0], userLoc[1]) : centroid(allStops);
+        if (target != null) {
+            moveTo(CameraUpdateFactory.newLatLngZoom(target, 16f), false);
+        }
+        map.setOnCameraIdleListener(this::refreshPickMarkers);
+        refreshPickMarkers();
+    }
+
+    /** Shows at most PICK_LIMIT stops nearest to the middle of the visible map, so a big city stays fast. */
+    private void refreshPickMarkers() {
+        if (!pickMode || map == null || mapView == null) {
+            return;
+        }
+        LatLng c = map.getCameraPosition().target;
+        LatLngBounds vis = map.getProjection().getVisibleRegion().latLngBounds;
+        double radius = Haversine.distanceMeters(vis.northeast.latitude, vis.northeast.longitude,
+                vis.southwest.latitude, vis.southwest.longitude) / 2.0;
+        final int gen = generation;
+        final List<StopPoint> stops = allStops;
+        final NearbyDataSource src = data;
+        executor.execute(() -> {
+            try {
+                List<StopMatch> near = NearestStopFinder.findNearby(stops, c.latitude, c.longitude, radius, PICK_LIMIT);
+                List<StopPoint> forNames = new ArrayList<>();
+                for (StopMatch m : near) {
+                    forNames.add(m.getStop());
+                }
+                src.prefetchNames(forNames);
+                post(gen, () -> drawPickMarkers(forNames));
+            } catch (Exception e) {
+                Log.e(TAG, "pick markers failed", e);
+            }
+        });
+    }
+
+    private void drawPickMarkers(List<StopPoint> stops) {
+        if (!pickMode || map == null) {
+            return;
+        }
         map.clear();
         pickMarkers.clear();
-        // 'var': the compile-only classpath has no InnerClasses attribute, so LatLngBounds.Builder cannot be named
-        var b = LatLngBounds.builder();
-        for (StopPoint s : data.getStops()) {
-            LatLng p = new LatLng(s.getLat(), s.getLng());
-            Marker m = map.addMarker(new MarkerOptions().position(p).title(s.getName())
+        for (StopPoint s : stops) {
+            boolean current = selectedStop != null && selectedStop.getId() == s.getId();
+            Marker m = map.addMarker(new MarkerOptions().position(new LatLng(s.getLat(), s.getLng()))
+                    .title(data.getStopName(s.getId()))
                     .icon(BitmapDescriptorFactory.defaultMarker(
-                            selectedStop != null && selectedStop.getId() == s.getId()
-                                    ? BitmapDescriptorFactory.HUE_RED : BitmapDescriptorFactory.HUE_ORANGE)));
+                            current ? BitmapDescriptorFactory.HUE_RED : BitmapDescriptorFactory.HUE_ORANGE)));
             pickMarkers.put(m, s);
-            b.include(p);
         }
-        double[] loc = data.getUserLocation();
-        if (loc != null) {
-            LatLng u = new LatLng(loc[0], loc[1]);
-            map.addMarker(new MarkerOptions().position(u).title("Вы здесь")
-                    .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)));
-            b.include(u);
-        }
-        if (!pickMarkers.isEmpty()) {
-            CameraUpdate u = CameraUpdateFactory.newLatLngBounds(b.build(), dp(64));
-            if (mapLoaded) {
-                map.animateCamera(u);
-            } else {
-                pendingCamera = u;
-            }
-        }
+        addUserMarker();
     }
 
     private void chooseStop(StopPoint stop) {
-        pickMode = false;
-        pickHint.setVisibility(View.GONE);
-        changeStopButton.setText("Сменить остановку");
-        ((View) statusView.getParent()).setVisibility(View.GONE);
-        double[] loc = data.getUserLocation();
-        double d = loc == null ? -1
-                : kz.onay.nearby.logic.Haversine.distanceMeters(loc[0], loc[1], stop.getLat(), stop.getLng());
+        leavePickState();
+        statusBar.setVisibility(View.GONE);
+        double d = userLoc == null ? -1
+                : Haversine.distanceMeters(userLoc[0], userLoc[1], stop.getLat(), stop.getLng());
         highlight.clear();
+        clearCandidates();
         showStop(stop, d);
+    }
+
+    private static LatLng centroid(List<StopPoint> stops) {
+        double la = 0;
+        double ln = 0;
+        int n = 0;
+        for (StopPoint s : stops) {
+            if (s.getLat() != null && s.getLng() != null) {
+                la += s.getLat();
+                ln += s.getLng();
+                n++;
+            }
+        }
+        return n == 0 ? null : new LatLng(la / n, ln / n);
     }
 
     // ---------- helpers ----------
@@ -592,7 +925,7 @@ public class NearbyStopFragment extends Fragment {
         return (color & 0x00FFFFFF) | (a << 24);
     }
 
-    // ---------- lifecycle forwarding for MapView ----------
+    // ---------- lifecycle ----------
 
     @Override
     public void onStart() {
@@ -604,6 +937,10 @@ public class NearbyStopFragment extends Fragment {
     public void onResume() {
         super.onResume();
         mapView.onResume();
+        if (recheckOnResume) {
+            recheckOnResume = false;
+            start();
+        }
     }
 
     @Override
@@ -638,7 +975,13 @@ public class NearbyStopFragment extends Fragment {
 
     @Override
     public void onDestroyView() {
+        generation++;
         handler.removeCallbacksAndMessages(null);
+        stopLocationWatch();
+        if (executor != null) {
+            executor.shutdownNow();
+            executor = null;
+        }
         if (mapView != null) {
             mapView.onDestroy();
         }
@@ -646,6 +989,7 @@ public class NearbyStopFragment extends Fragment {
         map = null;
         mapLoaded = false;
         pendingCamera = null;
+        pickMode = false;
         polylines.clear();
         arrows.clear();
         chips.clear();

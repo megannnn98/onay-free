@@ -8,10 +8,17 @@ import kz.onay.nearby.logic.StopPoint;
 
 /** Everything the screen needs. Stage 2 uses {@link TestData}; later stages read the app's own data. */
 public interface NearbyDataSource {
-    /** User location as {lat, lng}, or null when unavailable. */
-    double[] getUserLocation();
-
+    /** All stops with coordinates. May touch the database, so call it off the main thread. */
     List<StopPoint> getStops();
+
+    /** Loads display names for the given stops. Call off the main thread; {@link #getStopName} is then cheap. */
+    void prefetchNames(Collection<StopPoint> stops);
+
+    /** Display name of a stop; never touches the database. */
+    String getStopName(long stopId);
+
+    /** False while routes are not connected to real data; the screen then says so instead of showing nothing. */
+    boolean hasRoutes();
 
     /** Route ids the server lists for the stop. */
     Collection<Long> getRouteIdsAtStop(long stopId);

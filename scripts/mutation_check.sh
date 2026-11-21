@@ -46,5 +46,17 @@ run_mutant bearing-swapped    Bearing.java               "double y = Math.sin(dL
 run_mutant line-no-length-chk RouteLine.java             "if (lats.length != lngs.length) {" "if (false) {"
 run_mutant line-drawable-one  RouteLine.java             "return lats.length >= 2;"        "return lats.length >= 1;"
 run_mutant line-bearing-last2 RouteLine.java             "if (lats[i] != lats[i - 1] || lngs[i] != lngs[i - 1]) {" "if (true) {"
+run_mutant quality-no-nullisland LocationQuality.java    "|| (lat == 0.0 && lng == 0.0)"   ""
+run_mutant quality-age-strict LocationQuality.java       "nowMs - fixTimeMs > maxAgeMs"    "nowMs - fixTimeMs >= maxAgeMs"
+run_mutant quality-null-time  LocationQuality.java       "fixTimeMs == null || "           ""
+run_mutant quality-no-range   LocationQuality.java       "|| lat < -90.0 || lat > 90.0"    ""
+run_mutant cand-extra-strict  NearbyCandidates.java      "if (m.getDistanceMeters() > nearest.getDistanceMeters() + extraMeters) {" "if (m.getDistanceMeters() >= nearest.getDistanceMeters() + extraMeters) {"
+run_mutant cand-no-dedupe     NearbyCandidates.java      "if (seen.add(m.getStop().getId())) {" "if (true) {"
+run_mutant cand-no-sort       NearbyCandidates.java      "int c = Double.compare(a.getDistanceMeters(), b.getDistanceMeters());" "int c = 0;"
+run_mutant cand-no-max        NearbyCandidates.java      "&& out.size() < max"             ""
+run_mutant names-no-exact     StopNames.java             "if (k.equalsIgnoreCase(preferredLanguage) && usable(byLanguage.get(k))) {" "if (false) {"
+run_mutant names-no-russian   StopNames.java             'if (primary(k).equals("ru") && usable(byLanguage.get(k))) {' "if (false) {"
+run_mutant names-no-placeholder StopNames.java           'return "Остановка " + stopId;'   'return "";'
+run_mutant names-blank-ok     StopNames.java             "return s != null && !s.trim().isEmpty();" "return s != null;"
 echo "survivors: $survived"
 [ "$survived" -eq 0 ]
