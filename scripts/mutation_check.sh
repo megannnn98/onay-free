@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Mutation check for the pure-logic layer: each mutant must make at least one JVM test fail.
+# Runs on a copy under work/mut, never touches app/. Mutants run one at a time.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+JUNIT="$ROOT/work/libs/junit-console.jar"
+L=kz/onay/nearby/logic
+MUT="$ROOT/work/mut"
+mkdir -p "$MUT"
+survived=0
+run_mutant() { # name file old new
+  local name="$1" file="$2" old="$3" new="$4" dir="$MUT/$1"
+  mkdir -p "$dir/src" "$dir/out"
+  cp -r "$ROOT/app/logic" "$dir/src/"
+  python3 -I - "$dir/src/logic/$L/$file" "$old" "$new" <<'PY'
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p, encoding="utf-8").read()
+if s.count(old) != 1:
+    sys.exit("mutation pattern must match exactly once: %r (found %d)" % (old, s.count(old)))
+open(p, "w", encoding="utf-8").write(s.replace(old, new))
+PY
+  javac --release 11 -d "$dir/out" -cp "$JUNIT" "$dir"/src/logic/$L/*.java "$ROOT"/app/test/$L/*.java
+  if java -jar "$JUNIT" execute --class-path "$dir/out" --scan-class-path --disable-banner >"$dir/log.txt" 2>&1; then
+    echo "SURVIVED  $name"; survived=$((survived+1))
+  else
+    echo "killed    $name"
+  fi
+}
+run_mutant radius-exclusive   NearestStopFinder.java     "d <= maxRadiusMeters"            "d < maxRadiusMeters"
+run_mutant no-id-tiebreak     NearestStopFinder.java     "return c != 0 ? c : Long.compare(a.getStop().getId(), b.getStop().getId());" "return c;"
+run_mutant no-lat-range       NearestStopFinder.java     "&& lat >= -90.0 && lat <= 90.0"  ""
+run_mutant sort-descending    NearestStopFinder.java     "int c = Double.compare(a.getDistanceMeters(), b.getDistanceMeters());" "int c = Double.compare(b.getDistanceMeters(), a.getDistanceMeters());"
+run_mutant no-limit           NearestStopFinder.java     "return matches.size() > limit ? new ArrayList<>(matches.subList(0, limit)) : matches;" "return matches;"
+run_mutant haversine-radius   Haversine.java             "6371008.8"                       "6371008.8 * 1.01"
+run_mutant no-type-filter     RoutesAtStopSelector.java  "|| !isSupportedType(r.getTypeId())" ""
+run_mutant no-dedupe          RoutesAtStopSelector.java  "Set<Long> wanted = new LinkedHashSet<>(routeIdsAtStop);" "Collection<Long> wanted = routeIdsAtStop;"
+run_mutant dir-inverted       RoutesAtStopSelector.java  "if (d.servesStop(stopId))"       "if (!d.servesStop(stopId))"
+run_mutant guess-direction    RoutesAtStopSelector.java  "Collections.sort(dirs);"         "if (dirs.isEmpty()) { dirs.add(0); } Collections.sort(dirs);"
+run_mutant string-sort        RoutesAtStopSelector.java  "if (ak != bk) {"                 "if (false) {"
+run_mutant toggle-no-clear    RouteHighlightState.java   "selectedRouteId = isSelected(routeId) ? null : Long.valueOf(routeId);" "selectedRouteId = Long.valueOf(routeId);"
+run_mutant alpha-swapped      RouteHighlightState.java   "? FULL_ALPHA : DIM_ALPHA"        "? DIM_ALPHA : FULL_ALPHA"
+run_mutant retain-never-drops RouteHighlightState.java   "(routeIds == null || !routeIds.contains(selectedRouteId))" "false"
+echo "survivors: $survived"
+[ "$survived" -eq 0 ]
