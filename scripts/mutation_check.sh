@@ -75,5 +75,10 @@ run_mutant veh-no-age         VehicleFilter.java         "if (nowSec - p.getTime
 run_mutant veh-oldest-wins    VehicleFilter.java         "p.getTimestampSec() > seen.getTimestampSec()" "p.getTimestampSec() < seen.getTimestampSec()"
 run_mutant veh-no-sort        VehicleFilter.java         "int c = Long.compare(a.getRouteId(), b.getRouteId());" "int c = 0;"
 run_mutant veh-null-island    VehicleFilter.java         "&& !(lat == 0.0 && lng == 0.0)"  ""
+run_mutant veh-latest-min     VehicleFilter.java         "latest = Math.max(latest, p.getTimestampSec());" "latest = Math.min(latest, p.getTimestampSec());"
+run_mutant veh-latest-last    VehicleFilter.java         "latest = Math.max(latest, p.getTimestampSec());" "latest = p.getTimestampSec();"
+run_mutant veh-ref-no-cap     VehicleFilter.java         "newest == 0L || newest > nowSec + MAX_FUTURE_SKEW_SEC" "newest == 0L"
+run_mutant veh-ref-cap-edge   VehicleFilter.java         "newest > nowSec + MAX_FUTURE_SKEW_SEC" "newest >= nowSec + MAX_FUTURE_SKEW_SEC"
+run_mutant veh-ref-no-zero    VehicleFilter.java         "newest == 0L || newest > nowSec" "newest > nowSec"
 echo "survivors: $survived"
 [ "$survived" -eq 0 ]

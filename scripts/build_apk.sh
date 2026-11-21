@@ -44,6 +44,9 @@ echo "[2/6] patch smali, ads, layout and manifest"
 python3 -I "$ROOT/scripts/patch_smali.py" "$WORK/decoded"
 python3 -I "$ROOT/scripts/patch_ads.py" "$WORK/decoded"
 python3 -I "$ROOT/scripts/patch_layout.py" "$WORK/decoded"
+# AppDataSource reads this generated Dagger field by name: fail the build, not the screen on the device.
+grep -rq -- "^\.field .*provideInterceptorProvider:" "$WORK"/decoded/smali*/kz/onay/di/ \
+  || { echo "field provideInterceptorProvider not found in kz/onay/di (R8 renamed it?)" >&2; exit 1; }
 if [ "${ONAY_DEBUG_ACTIVITY:-0}" = "1" ]; then
   python3 -I "$ROOT/scripts/patch_manifest.py" "$WORK/decoded/AndroidManifest.xml"
 else

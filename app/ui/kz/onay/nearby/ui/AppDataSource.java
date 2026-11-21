@@ -76,10 +76,10 @@ final class AppDataSource implements NearbyDataSource {
         if (component == null) {
             throw new Unavailable("route component is not built (city not selected)", false);
         }
-        AppDataSource src = new AppDataSource(component.getRouteDatabase(), component.getManagedChannel(),
+        // Stops are local and need no token: a signed-out user still gets the nearest stop and the manual
+        // pick. The token is applied per network call (routes, vehicles).
+        return new AppDataSource(component.getRouteDatabase(), component.getManagedChannel(),
                 interceptorOf(component));
-        src.applyAccountToken();
-        return src;
     }
 
     /**
@@ -161,8 +161,12 @@ final class AppDataSource implements NearbyDataSource {
 
     @Override
     public void loadRoutesForStop(long stopId) throws Exception {
-        applyAccountToken();
         List<Long> ids = routeIdsByStop.get(stopId);
+        if (ids != null && routeInfos.keySet().containsAll(ids)) {
+            failedRoutes = 0;
+            return; // everything is cached: no token needed, also after sign-out
+        }
+        applyAccountToken(); // throws Unavailable(loginRequired) when signed out
         if (ids == null) {
             ids = fetchStopRoutes(stopId);
             routeIdsByStop.put(stopId, ids);
@@ -274,6 +278,7 @@ final class AppDataSource implements NearbyDataSource {
         List<VehiclePosition> out = new ArrayList<>();
         int withRoutePoint = 0;
         int withActualPoint = 0;
+        java.util.Set<Long> foreignRoutes = new java.util.HashSet<>(); // route ids answered but not asked (child routes?)
         long minAge = Long.MAX_VALUE;
         long maxAge = Long.MIN_VALUE;
         java.util.Iterator<?> it = stub.list(req);
@@ -290,12 +295,16 @@ final class AppDataSource implements NearbyDataSource {
             long ts = hasActual ? p.getActualPoint().getTimestamp().getSeconds() : point.getTimestamp().getSeconds();
             out.add(new VehiclePosition(p.getDeviceId(), p.getRouteId(), p.getDirectionIndex(),
                     point.getLatitude(), point.getLongitude(), point.getBearing(), ts));
+            if (!routeIds.contains(p.getRouteId())) {
+                foreignRoutes.add(p.getRouteId());
+            }
             long age = now - ts;
             minAge = Math.min(minAge, age);
             maxAge = Math.max(maxAge, age);
         }
         Log.i(TAG, "vehicles on " + routeIds.size() + " routes: " + out.size() + " (routePoint " + withRoutePoint
-                + ", actualPoint " + withActualPoint + ")"
+                + ", actualPoint " + withActualPoint + ", foreign route ids " + foreignRoutes.size()
+                + (foreignRoutes.isEmpty() ? "" : " " + foreignRoutes) + ")"
                 + (out.isEmpty() ? "" : ", report age " + minAge + ".." + maxAge + " s"));
         return out;
     }

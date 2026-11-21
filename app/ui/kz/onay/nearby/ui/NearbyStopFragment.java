@@ -293,10 +293,13 @@ public class NearbyStopFragment extends Fragment {
 
         LinearLayout bottomBar = new LinearLayout(c);
         bottomBar.setOrientation(LinearLayout.HORIZONTAL);
+        bottomBar.setPadding(dp(16), dp(8), dp(16), dp(8));
         changeStopButton = new Button(c);
-        changeStopButton.setText("Сменить остановку");
         changeStopButton.setOnClickListener(v -> togglePickMode());
-        bottomBar.addView(changeStopButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        styleChangeStopButton(false);
+        changeStopButton.setMinHeight(dp(48)); // not a fixed height: a large system font must not clip the text
+        bottomBar.addView(changeStopButton,
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         root.addView(bottomBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -317,6 +320,10 @@ public class NearbyStopFragment extends Fragment {
 
     private void start() {
         handler.removeCallbacksAndMessages(null);
+        // The line above just deleted the vehicle tick and the only callback that resets the
+        // in-flight flag: a request of the previous view must not block this one.
+        stopVehiclePolling();
+        vehicleRequestInFlight = false;
         stopLocationWatch();
         final int gen = generation;
         locationNote = null;
@@ -346,6 +353,7 @@ public class NearbyStopFragment extends Fragment {
                 post(gen, () -> onStopsLoaded(src, stops));
             } catch (AppDataSource.Unavailable e) {
                 Log.w(TAG, "route data unavailable: " + e.getMessage());
+                // loginRequired normally comes from loadRoutes (onRoutesFailed); create() no longer needs a token.
                 post(gen, () -> showStatus(e.loginRequired
                         ? "Войдите в приложение, чтобы видеть маршруты"
                         : "Город не выбран или данные транспорта ещё не готовы", "Повторить", this::start));
@@ -1135,14 +1143,21 @@ public class NearbyStopFragment extends Fragment {
     }
 
     private void applyVehicles(List<VehiclePosition> reported) {
-        List<VehiclePosition> shown = VehicleFilter.select(reported, routes,
-                System.currentTimeMillis() / 1000, VEHICLE_MAX_AGE_SEC);
+        long nowSec = System.currentTimeMillis() / 1000;
+        // The snapshot's own time is the reference (see VehicleFilter.referenceSec): the phone clock may be off.
+        long reference = VehicleFilter.referenceSec(reported, nowSec);
+        if (!reported.isEmpty() && VehicleFilter.latestTimestamp(reported) == 0L) {
+            Log.w(TAG, "reports without timestamps: " + reported.size() + " will be hidden");
+        }
+        List<VehiclePosition> shown = VehicleFilter.select(reported, routes, reference, VEHICLE_MAX_AGE_SEC);
         shownVehicles = shown;
         renderVehicles(shown);
         String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
+        long snapshotAgeSec = Math.max(0L, nowSec - reference);
+        String stale = snapshotAgeSec > 60L ? " · снимок " + AgeText.ago(snapshotAgeSec * 1000L) : "";
         vehicleNote.setText(shown.isEmpty()
-                ? "Транспорта на этих маршрутах сейчас нет данных · " + time
-                : "Транспорт на карте: " + shown.size() + " · обновлено " + time);
+                ? "Транспорта на этих маршрутах сейчас нет данных · " + time + stale
+                : "Транспорт на карте: " + shown.size() + " · обновлено " + time + stale);
     }
 
     /** Moves existing markers, adds new ones and removes those that left; never rebuilds all of them. */
@@ -1261,7 +1276,7 @@ public class NearbyStopFragment extends Fragment {
         pickMode = true;
         stopVehiclePolling();
         pickHint.setVisibility(View.VISIBLE);
-        changeStopButton.setText("Отмена");
+        styleChangeStopButton(true);
         showPickMarkers();
     }
 
@@ -1273,7 +1288,7 @@ public class NearbyStopFragment extends Fragment {
         pickMarkers.clear();
         pickMode = false;
         pickHint.setVisibility(View.GONE);
-        changeStopButton.setText("Сменить остановку");
+        styleChangeStopButton(false);
         if (map != null) {
             map.setOnCameraIdleListener(null);
         }
@@ -1287,7 +1302,17 @@ public class NearbyStopFragment extends Fragment {
             startVehiclePolling();
         } else if (map != null) {
             map.clear();
+            forgetMapObjects();
         }
+    }
+
+    /** map.clear() removed these from the map: drop our references so nothing updates dead objects. */
+    private void forgetMapObjects() {
+        userMarker = null;
+        polylines.clear();
+        arrows.clear();
+        shownLines.clear();
+        vehicleMarkers.clear();
     }
 
     /** Puts the camera near the user (or the middle of all stops) and keeps markers for the stops in view. */
@@ -1335,6 +1360,7 @@ public class NearbyStopFragment extends Fragment {
             return;
         }
         map.clear();
+        forgetMapObjects();
         pickMarkers.clear();
         for (StopPoint s : stops) {
             boolean current = selectedStop != null && selectedStop.getId() == s.getId();
@@ -1381,6 +1407,24 @@ public class NearbyStopFragment extends Fragment {
             t.setTypeface(Typeface.DEFAULT_BOLD);
         }
         return t;
+    }
+
+    /** Rounded pill: filled blue to change the stop, white with a blue outline to cancel the manual pick. */
+    private void styleChangeStopButton(boolean cancel) {
+        final int blue = PALETTE[0]; // the same blue as the route chips and the my-location button
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(24));
+        bg.setColor(cancel ? Color.WHITE : blue);
+        bg.setStroke(dp(2), blue);
+        changeStopButton.setBackground(bg);
+        changeStopButton.setText(cancel ? "Отмена" : "Сменить остановку");
+        changeStopButton.setTextColor(cancel ? blue : Color.WHITE);
+        changeStopButton.setAllCaps(false);
+        changeStopButton.setTextSize(16f);
+        changeStopButton.setTypeface(Typeface.DEFAULT_BOLD);
+        changeStopButton.setStateListAnimator(null);
+        // A Material theme may tint whatever background we set: keep the two colours exactly as drawn.
+        changeStopButton.setBackgroundTintList(null);
     }
 
     private int dp(float v) {

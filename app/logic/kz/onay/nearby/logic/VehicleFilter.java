@@ -9,13 +9,38 @@ import java.util.Map;
 
 /** Chooses which reported vehicles are worth drawing for the routes shown at a stop. */
 public final class VehicleFilter {
+    /** A snapshot time further ahead of the device clock than this is a broken report, not a reference. */
+    private static final long MAX_FUTURE_SKEW_SEC = 3600L;
+
     private VehicleFilter() {
+    }
+
+    /** The newest report time of a snapshot, or 0 when there is none. Reports of one response share it. */
+    public static long latestTimestamp(List<VehiclePosition> all) {
+        long latest = 0L;
+        if (all != null) {
+            for (VehiclePosition p : all) {
+                latest = Math.max(latest, p.getTimestampSec());
+            }
+        }
+        return latest;
+    }
+
+    /**
+     * The time to measure report ages against: the snapshot's own newest report, so a device clock that is a
+     * few minutes off neither hides every vehicle nor passes a stale snapshot. Falls back to {@code nowSec}
+     * when no report has a time, and when the newest is more than an hour ahead of it (one broken report must
+     * not become the reference of the whole snapshot).
+     */
+    public static long referenceSec(List<VehiclePosition> all, long nowSec) {
+        long newest = latestTimestamp(all);
+        return newest == 0L || newest > nowSec + MAX_FUTURE_SKEW_SEC ? nowSec : newest;
     }
 
     /**
      * Keeps vehicles of the shown routes, in a direction that serves the stop (all directions when the
      * stop's direction is unknown), with valid coordinates and a report no older than {@code maxAgeSec}.
-     * A report slightly in the future (clock difference) counts as fresh. Only the newest report per device
+     * A report slightly in the future counts as fresh. {@code nowSec} is normally {@link #referenceSec}, not the device clock. Only the newest report per device
      * is kept. Sorted by route id, then device id.
      */
     public static List<VehiclePosition> select(List<VehiclePosition> all, List<RouteAtStop> shown,

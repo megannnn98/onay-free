@@ -108,4 +108,51 @@ class VehicleFilterTest {
         assertTrue(VehicleFilter.select(Arrays.asList(v(1, 10, 0, NOW)), null, NOW, MAX_AGE).isEmpty());
         assertTrue(VehicleFilter.select(Collections.<VehiclePosition>emptyList(), Arrays.asList(at(10, 0)), NOW, MAX_AGE).isEmpty());
     }
+
+    @Test
+    void latestTimestampIsTheNewestReportOrZero() {
+        assertEquals(NOW, VehicleFilter.latestTimestamp(Arrays.asList(v(1, 10, 0, NOW), v(2, 10, 0, NOW - 7))));
+        assertEquals(0L, VehicleFilter.latestTimestamp(Collections.<VehiclePosition>emptyList()));
+        assertEquals(0L, VehicleFilter.latestTimestamp(null));
+    }
+
+    @Test
+    void referenceIsTheSnapshotTimeWhateverThePhoneClockSays() {
+        List<VehiclePosition> all = Arrays.asList(v(1, 10, 0, NOW), v(2, 10, 0, NOW - 400));
+        assertEquals(NOW, VehicleFilter.referenceSec(all, NOW + 7200)); // phone clock 2 h ahead: hidden before
+        assertEquals(NOW, VehicleFilter.referenceSec(all, NOW - 600)); // phone clock 10 min behind
+    }
+
+    @Test
+    void referenceFallsBackToTheDeviceClockWithoutTimestamps() {
+        assertEquals(NOW, VehicleFilter.referenceSec(Arrays.asList(v(1, 10, 0, 0)), NOW));
+        assertEquals(NOW, VehicleFilter.referenceSec(Collections.<VehiclePosition>emptyList(), NOW));
+        assertEquals(NOW, VehicleFilter.referenceSec(null, NOW));
+    }
+
+    @Test
+    void oneCorruptFutureReportDoesNotHideTheFleet() {
+        List<VehiclePosition> all = Arrays.asList(v(1, 10, 0, NOW - 5), v(2, 10, 0, NOW + 10L * 365 * 24 * 3600));
+        long reference = VehicleFilter.referenceSec(all, NOW);
+        assertEquals(NOW, reference);
+        assertTrue(devices(VehicleFilter.select(all, Arrays.asList(at(10, 0)), reference, MAX_AGE)).contains(1L));
+    }
+
+    @Test
+    void referenceKeepsASnapshotSlightlyAheadOfTheClock() {
+        long ahead = NOW + 3600; // on the limit: still a reference
+        assertEquals(ahead, VehicleFilter.referenceSec(Arrays.asList(v(1, 10, 0, ahead)), NOW));
+        assertEquals(NOW, VehicleFilter.referenceSec(Arrays.asList(v(1, 10, 0, ahead + 1)), NOW));
+    }
+
+    @Test
+    void phoneClockFarAheadWouldDropEverythingIfUsedAsReference() {
+        List<VehiclePosition> all = Arrays.asList(v(1, 10, 0, NOW));
+        assertTrue(VehicleFilter.select(all, Arrays.asList(at(10, 0)), NOW + 3600, MAX_AGE).isEmpty());
+    }
+
+    @Test
+    void reportWithoutTimestampIsDropped() {
+        assertTrue(VehicleFilter.select(Arrays.asList(v(1, 10, 0, 0)), Arrays.asList(at(10, 0)), NOW, MAX_AGE).isEmpty());
+    }
 }
