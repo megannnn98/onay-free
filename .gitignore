@@ -2,3 +2,4 @@ work/
 *.apks
 *.apk
 *.jks
+__pycache__/

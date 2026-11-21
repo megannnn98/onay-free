@@ -5,7 +5,9 @@ on:
     branches: [master]
     paths:
       - "scripts/build_universal_apk.sh"
-      - "tests/test_build_universal_apk.py"
+      - "scripts/verify_universal_apk.sh"
+      - "tests/**"
+      - "docs/release-notes-template.md"
       - ".github/workflows/publish-single-apk.yml"
   workflow_dispatch:
     inputs:
@@ -19,6 +21,16 @@ on:
         required: true
         default: "v0.0.1"
         type: string
+      dry_run:
+        description: "Build and verify only: keep the APK as a 3-day workflow artifact and publish nothing"
+        required: true
+        default: false
+        type: boolean
+      prerelease:
+        description: "Mark the release as a pre-release (keep it set until the APK is tested on a device)"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -32,7 +44,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run offline packaging tests
+      - name: Syntax-check the shell scripts
+        run: |
+          for f in scripts/build_universal_apk.sh scripts/verify_universal_apk.sh; do bash -n "$f"; done
+      - name: Run offline packaging and workflow tests
         run: python3 -m unittest discover -s tests -v
 
   publish:
@@ -60,11 +75,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
           SOURCE_TAG: ${{ inputs.source_tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Invalid release tag"; exit 1; }
+          [[ "$SOURCE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Invalid source tag"; exit 1; }
           [ "$TAG" != "$SOURCE_TAG" ] || { echo "::error::Target and source tags must differ"; exit 1; }
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          if [ "$DRY_RUN" != "true" ] && gh release view "$TAG" >/dev/null 2>&1; then
             echo "::error::Release $TAG already exists; refusing to overwrite it"
             exit 1
           fi
@@ -74,11 +91,13 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
-
-      - name: Install Android build tools
+      - name: Install Android build tools (SDK is preinstalled on the runner)
         run: |
-          sdkmanager --install "build-tools;35.0.1"
+          set -euo pipefail
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$sdkmanager" ] || { echo "::error::sdkmanager not found in the runner image"; exit 1; }
+          yes | "$sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$sdkmanager" --install "build-tools;35.0.1" >/dev/null
           echo "$ANDROID_HOME/build-tools/35.0.1" >> "$GITHUB_PATH"
 
       - name: Download previously signed split archive
@@ -114,29 +133,75 @@ jobs:
           OUTPUT_APK="work/release/onay-free-${TAG#v}.apk" \
           bash scripts/build_universal_apk.sh
 
-      - name: Verify certificate matches original release
+      - name: Verify packaging and that the signing certificate matches the original release
         env:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           unzip -p "$SPLITS_ARCHIVE" base.apk > "$RUNNER_TEMP/onay/base.apk"
           src="$(apksigner verify --print-certs "$RUNNER_TEMP/onay/base.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
-          new="$(apksigner verify --print-certs "work/release/onay-free-${TAG#v}.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
-          if [ -z "$src" ] || [ "$src" != "$new" ]; then
-            echo "::error::Signing certificate differs from original release"
-            exit 1
+          [ -n "$src" ] || { echo "::error::Cannot read the certificate of the source release"; exit 1; }
+          apk="work/release/onay-free-${TAG#v}.apk"
+          bash scripts/verify_universal_apk.sh "$apk" "$src" | tee "$RUNNER_TEMP/verify.txt"
+          {
+            echo "### APK checks"
+            echo '```'
+            cat "$RUNNER_TEMP/verify.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "APK_PATH=$apk" >> "$GITHUB_ENV"
+          echo "APK_SHA256=$(sha256sum "$apk" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Keep the APK as a short-lived artifact (dry run only)
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: onay-free-dry-run
+          path: ${{ env.APK_PATH }}
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Prepare release notes
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ inputs.tag }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if [ "$PRERELEASE" = "true" ]; then
+            status='**Предварительный выпуск.** Упаковка проверена автоматически (структура, подпись, нативные библиотеки, сертификат). Установка и работа на реальном устройстве при выпуске не подтверждены.'
+          else
+            status='Выпуск отмечен как проверенный на устройстве (отметка выставлена вручную при запуске workflow).'
           fi
-          sha256sum "work/release/onay-free-${TAG#v}.apk"
+          sed -e "s/@VERSION@/${TAG#v}/g" \
+              -e "s/@SOURCE_TAG@/${SOURCE_TAG}/g" \
+              -e "s/@SHA256@/${APK_SHA256}/g" \
+              docs/release-notes-template.md > "$RUNNER_TEMP/notes.md"
+          printf '%s\n' "$status" > "$RUNNER_TEMP/status.txt"
+          python3 - "$RUNNER_TEMP/notes.md" "$RUNNER_TEMP/status.txt" <<'PY'
+          import sys
+          notes, status = sys.argv[1:3]
+          text = open(notes, encoding="utf-8").read().replace("@STATUS@", open(status, encoding="utf-8").read().strip())
+          open(notes, "w", encoding="utf-8").write(text)
+          PY
 
       - name: Create release and upload APK
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
-          SOURCE_TAG: ${{ inputs.source_tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" "work/release/onay-free-${TAG#v}.apk" \
+          flags=()
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          gh release create "$TAG" "$APK_PATH" \
             --target "$GITHUB_SHA" \
             --title "onay-free ${TAG#v} (single APK)" \
-            --notes "One ARM64 APK, install directly on Android. Repacked from $SOURCE_TAG; no application code changes. Original ONAY! from Google Play has a different signature and must be uninstalled. Real-device smoke test is still required." \
-            --prerelease
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            "${flags[@]}"
+
+      - name: Remove the signing key from the runner
+        if: always()
+        run: rm -f "$RUNNER_TEMP/onay/signing.jks" "$RUNNER_TEMP/onay/base.apk"
