@@ -52,7 +52,8 @@ elif name == 'apktool':
             for entry in old.namelist():
                 data = old.read(entry)
                 if entry == 'AndroidManifest.xml':
-                    data = (origin / entry).read_bytes()
+                    # Offline placeholder for a binary AXML produced by real apktool.
+                    data = b'\\x03\\x00\\x08\\x00' + (origin / entry).read_bytes()
                 if entry == 'classes.dex' and os.environ.get('MOCK_CLONE_CORRUPT'):
                     data = b'broken dex'
                 z.writestr(entry, data)
