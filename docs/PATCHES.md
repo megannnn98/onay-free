@@ -9,9 +9,11 @@
 |---|---|---|---|
 | 1 | Новый dex `classes12.dex` (34 класса: `kz.onay.nearby.logic.*`, `kz.onay.nearby.ui.*`) | добавляется в `base.apk` скриптом `scripts/add_dex.py` | код экрана «Рядом» и логики |
 | 2 | **Smali**: в `MainActivity.Q0(int)` ветка вкладки 0 вызывает `NearbyStopFragment.newInstance(null)` вместо `RoutesFragment.newInstance()` | `smali_classes11/kz/onay/ui/main/MainActivity.smali`, `scripts/patch_smali.py` | при открытии вкладки транспорта показывается «Рядом» |
-| 3 | Отладочная Activity `kz.onay.nearby.ui.NearbyStopDebugActivity` (`exported="true"`) | `AndroidManifest.xml`, `scripts/patch_manifest.py` | **только отладочная сборка** (`ONAY_DEBUG_ACTIVITY=1`): запуск через adb с тестовыми данными и подменой координаты. В релизной сборке отсутствует (проверено по манифесту) |
+| 3 | **Smali**: в `MainActivity.Q0(int)` ветка вкладки 2 (Life) вызывает `ProfileFragment.newInstance()` вместо `LifeFragment.newInstance()` | тот же `MainActivity.smali`, `scripts/patch_smali.py` | вкладка Life показывает тот же экран, что Cards; раздел купонов и партнёров Kwaaka больше не открывается через навигацию (код Life и Kwaaka не удалён) |
+| 4 | **Разметка**: `android:visibility="gone"` у `ComposeView compose_view_banner` | `res/layout/fragment_profile_main_cards.xml`, `scripts/patch_layout.py` | убран рекламный баннер на экране карт (виден и на Cards, и на Life); остальное на экране поднимается выше |
+| 5 | Отладочная Activity `kz.onay.nearby.ui.NearbyStopDebugActivity` (`exported="true"`) | `AndroidManifest.xml`, `scripts/patch_manifest.py` | **только отладочная сборка** (`ONAY_DEBUG_ACTIVITY=1`): запуск через adb с тестовыми данными и подменой координаты. В релизной сборке отсутствует (проверено по манифесту) |
 
-Правка 2 в smali: заменена одна инструкция вызова
+Правка 2 в smali (вкладка 0): заменена одна инструкция вызова
 ```
 -    invoke-static {}, Lkz/onay/ui/routes2/frontscreen/RoutesFragment;->newInstance()Lkz/onay/ui/routes2/frontscreen/RoutesFragment;
 +    const/4 v0, 0x0

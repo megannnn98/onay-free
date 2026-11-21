@@ -40,8 +40,9 @@ echo "[1/6] decode"
 apktool -JXmx10g d -f -o "$WORK/decoded" "$ORIG_DIR/base.apk" >"$WORK/decode.log" 2>&1 \
   || { tail -20 "$WORK/decode.log" >&2; exit 1; }
 
-echo "[2/6] patch smali and manifest"
+echo "[2/6] patch smali, layout and manifest"
 python3 -I "$ROOT/scripts/patch_smali.py" "$WORK/decoded"
+python3 -I "$ROOT/scripts/patch_layout.py" "$WORK/decoded"
 if [ "${ONAY_DEBUG_ACTIVITY:-0}" = "1" ]; then
   python3 -I "$ROOT/scripts/patch_manifest.py" "$WORK/decoded/AndroidManifest.xml"
 else

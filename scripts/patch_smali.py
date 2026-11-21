@@ -3,6 +3,9 @@
 Patch 1: MainActivity.Q0(int), tab 0 (transport) returns NearbyStopFragment instead of RoutesFragment.
 The original screen stays reachable through the "Обычная карта" button of the new screen.
 
+Patch 2: MainActivity.Q0(int), tab 2 (Life) returns ProfileFragment, the same screen as tab 1 (Cards),
+instead of the coupons and partner section.
+
 Each replacement must match exactly once, otherwise the build stops: a changed app version must not
 be patched silently.
 """
@@ -10,15 +13,23 @@ import glob
 import os
 import sys
 
-OLD = (
-    "    invoke-static {}, Lkz/onay/ui/routes2/frontscreen/RoutesFragment;->newInstance()"
-    "Lkz/onay/ui/routes2/frontscreen/RoutesFragment;\n"
-)
-NEW = (
-    "    const/4 v0, 0x0\n"
-    "\n"
-    "    invoke-static {v0}, Lkz/onay/nearby/ui/NearbyStopFragment;->newInstance(Landroid/os/Bundle;)"
-    "Lkz/onay/nearby/ui/NearbyStopFragment;\n"
+PATCHES = (
+    (
+        "tab 0 -> NearbyStopFragment",
+        "    invoke-static {}, Lkz/onay/ui/routes2/frontscreen/RoutesFragment;->newInstance()"
+        "Lkz/onay/ui/routes2/frontscreen/RoutesFragment;\n",
+        "    const/4 v0, 0x0\n"
+        "\n"
+        "    invoke-static {v0}, Lkz/onay/nearby/ui/NearbyStopFragment;->newInstance(Landroid/os/Bundle;)"
+        "Lkz/onay/nearby/ui/NearbyStopFragment;\n",
+    ),
+    (
+        "tab 2 (Life) -> ProfileFragment (same as Cards)",
+        "    invoke-static {}, Lkz/onay/ui/main/life/LifeFragment;->newInstance()"
+        "Lkz/onay/ui/main/life/LifeFragment;\n",
+        "    invoke-static {}, Lkz/onay/ui/main/profile/ProfileFragment;->newInstance()"
+        "Lkz/onay/ui/main/profile/ProfileFragment;\n",
+    ),
 )
 
 
@@ -31,17 +42,20 @@ def main(decoded_dir: str) -> None:
         text = f.read()
     if "NearbyStopFragment" in text:
         sys.exit("MainActivity.smali is already patched")
-    if text.count(OLD) != 1:
-        sys.exit("RoutesFragment.newInstance call: expected 1 occurrence, found %d" % text.count(OLD))
     marker = ".method public final Q0(I)Landroidx/fragment/app/Fragment;"
     start = text.index(marker)
     end = text.index(".end method", start)
-    if OLD not in text[start:end]:
-        sys.exit("the call is not inside Q0(I)")
-    text = text.replace(OLD, NEW)
+    body = text[start:end]
+    for name, old, new in PATCHES:
+        if text.count(old) != 1:
+            sys.exit("%s: expected 1 occurrence, found %d" % (name, text.count(old)))
+        if old not in body:
+            sys.exit("%s: the call is not inside Q0(I)" % name)
+        body = body.replace(old, new)
+        print("smali patched: MainActivity.Q0 " + name)
+    text = text[:start] + body + text[end:]
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
-    print("smali patched: MainActivity.Q0 tab 0 -> NearbyStopFragment")
 
 
 if __name__ == "__main__":
