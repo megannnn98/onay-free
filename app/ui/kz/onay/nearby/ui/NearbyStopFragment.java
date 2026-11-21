@@ -243,10 +243,16 @@ public class NearbyStopFragment extends Fragment {
                 action2.run();
             }
         });
+        styleSecondaryButton(actionButton);
+        styleSecondaryButton(actionButton2);
         buttons.addView(actionButton);
         buttons.addView(actionButton2);
+        // Long stop names must scroll instead of running off the screen.
+        HorizontalScrollView buttonScroll = new HorizontalScrollView(c);
+        buttonScroll.setHorizontalScrollBarEnabled(false);
+        buttonScroll.addView(buttons);
         status.addView(statusView);
-        status.addView(buttons);
+        status.addView(buttonScroll);
         root.addView(status);
 
         chipScroll = new HorizontalScrollView(c);
@@ -788,7 +794,7 @@ public class NearbyStopFragment extends Fragment {
                 continue;
             }
             Button b = new Button(c);
-            b.setAllCaps(false);
+            styleSecondaryButton(b);
             b.setText(String.format(Locale.US, "%s · %d м", data.getStopName(m.getStop().getId()),
                     Math.round(m.getDistanceMeters())));
             final StopMatch match = m;
@@ -1425,6 +1431,29 @@ public class NearbyStopFragment extends Fragment {
         changeStopButton.setStateListAnimator(null);
         // A Material theme may tint whatever background we set: keep the two colours exactly as drawn.
         changeStopButton.setBackgroundTintList(null);
+    }
+
+    /** Secondary action (retry, neighbouring stop): white pill with a blue outline, same blue as the main button. */
+    private void styleSecondaryButton(Button b) {
+        final int blue = PALETTE[0];
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(20));
+        bg.setColor(Color.WHITE);
+        bg.setStroke(dp(1), blue);
+        b.setBackground(bg);
+        b.setTextColor(blue);
+        b.setAllCaps(false);
+        b.setTextSize(14f);
+        b.setSingleLine(true);
+        b.setMinHeight(dp(40));
+        b.setMinimumHeight(dp(40));
+        b.setPadding(dp(16), 0, dp(16), 0);
+        b.setStateListAnimator(null);
+        b.setBackgroundTintList(null);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, dp(4), dp(8), dp(4));
+        b.setLayoutParams(lp);
     }
 
     private int dp(float v) {
