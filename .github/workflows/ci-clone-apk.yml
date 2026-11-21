@@ -1,0 +1,75 @@
+name: Verify independent APK packaging
+
+on:
+  pull_request:
+    paths:
+      - "scripts/build_universal_apk.sh"
+      - "scripts/patch_clone_manifest.py"
+      - "scripts/verify_clone_payload.py"
+      - "scripts/verify_universal_apk.sh"
+      - ".github/workflows/ci-clone-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clone-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download pinned apktool
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/apktool.jar" \
+            https://github.com/iBotPeaches/Apktool/releases/download/v2.12.1/apktool_2.12.1.jar
+          echo "66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa  $RUNNER_TEMP/apktool.jar" | sha256sum -c -
+          echo "APKTOOL_JAR=$RUNNER_TEMP/apktool.jar" >> "$GITHUB_ENV"
+
+      - name: Install Android build tools
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "build-tools;35.0.1" >/dev/null
+          echo "$ANDROID_HOME/build-tools/35.0.1" >> "$GITHUB_PATH"
+
+      - name: Download latest released single APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/source
+          gh release download v0.0.4 --pattern 'onay-free-0.0.4.apk' --dir work/source
+          [ -s work/source/onay-free-0.0.4.apk ]
+
+      - name: Generate disposable CI-only key (never used for a release)
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p work/keys
+          keytool -genkeypair -alias test -keyalg RSA -keysize 2048 -validity 30 \
+            -keystore work/keys/ci-only.jks -storetype JKS \
+            -storepass ci-test-only-password -keypass ci-test-only-password \
+            -dname 'CN=CI only, O=ONAY Free tests, C=KZ' -noprompt >/dev/null
+
+      - name: Build separate package (do NOT publish artifacts)
+        env:
+          ONAY_KS: work/keys/ci-only.jks
+          ONAY_KS_PASS: ci-test-only-password
+          ONAY_KS_ALIAS: test
+          ONAY_PACKAGE_NAME: kz.onay.free
+          SPLITS_INPUT: work/source/onay-free-0.0.4.apk
+          OUTPUT_APK: work/clone/onay-free-ci.apk
+        run: |
+          set -euo pipefail
+          bash scripts/build_universal_apk.sh
+          bash scripts/verify_universal_apk.sh work/clone/onay-free-ci.apk
+          echo "CI clone build: correct package and signed APK; NOT a real-device test." >> "$GITHUB_STEP_SUMMARY"
