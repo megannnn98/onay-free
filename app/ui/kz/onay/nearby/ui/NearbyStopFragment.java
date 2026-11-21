@@ -78,7 +78,6 @@ import kz.onay.nearby.logic.StopPoint;
 import kz.onay.nearby.logic.VehicleFilter;
 import kz.onay.nearby.logic.VehicleInfoText;
 import kz.onay.nearby.logic.VehiclePosition;
-import kz.onay.ui.main.MainActivity;
 import kz.onay.ui.routes2.shared.MyLocationRequestHelper;
 
 /**
@@ -108,6 +107,7 @@ public class NearbyStopFragment extends Fragment {
     private static final double OVERVIEW_LNG_SPAN = 0.0040; // about 330 m at this latitude
     /** GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE: the nested type is not on the compile-only classpath. */
     private static final int REASON_GESTURE = 1;
+    private static final float[][] STACK_ANCHORS = {{0.5f, 0.5f}, {0.5f, 1.1f}, {0.5f, -0.1f}, {1.1f, 0.5f}};
     private static final float PICK_MIN_ZOOM = 12f; // below this the map is not positioned on a place yet
     private static final double CAMERA_VEHICLE_RADIUS_METERS = 600.0;
     private static final double STACK_RADIUS_METERS = 25.0;
@@ -183,10 +183,11 @@ public class NearbyStopFragment extends Fragment {
     private boolean mapLoaded;
     private CameraUpdate pendingCamera;
     private boolean pickMode;
+    private boolean routesLoadSkipped;
     private boolean cameraAuto = true;
     private int mapPadTop = -1;
     private int mapPadBottom = -1;
-    private long tappedDevice = -1L;
+    private Marker raisedVehicle;
     private long snapshotReferenceSec;
 
     private StopPoint selectedStop;
@@ -397,7 +398,7 @@ public class NearbyStopFragment extends Fragment {
         chipHost.addView(chipScroll);
         chipHost.addView(chipFlowScroll);
         chipHeader.addView(chipHost, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        chipHeader.addView(expandButton, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        chipHeader.addView(expandButton, new LinearLayout.LayoutParams(dp(48), dp(48)));
         dock.addView(chipHeader);
 
         directionView = text(c, 14, false, 0xFF424242);
@@ -656,6 +657,7 @@ public class NearbyStopFragment extends Fragment {
 
     /** Moves the "you are here" marker, refreshes the distance to the selected stop and centres the camera. */
     private void onMyLocation(double lat, double lng) {
+        cameraAuto = false; // the user asked to see themselves: layout changes must not undo it
         setMyLocationBusy(false);
         userLoc = new double[] {lat, lng};
         LatLng at = new LatLng(lat, lng);
@@ -802,6 +804,7 @@ public class NearbyStopFragment extends Fragment {
         stopVehiclePolling();
         clearVehicles();
         cameraAuto = true;
+        routesLoadSkipped = false;
         selectedStop = stop;
         selectedDistance = distanceMeters;
         routes = Collections.emptyList();
@@ -854,7 +857,11 @@ public class NearbyStopFragment extends Fragment {
     }
 
     private boolean isStillSelected(StopPoint stop) {
-        return selectedStop != null && selectedStop.getId() == stop.getId() && !pickMode;
+        boolean same = selectedStop != null && selectedStop.getId() == stop.getId();
+        if (same && pickMode) {
+            routesLoadSkipped = true; // the answer arrived while the user was choosing a stop: load again on cancel
+        }
+        return same && !pickMode;
     }
 
     private void onRoutesLoaded(StopPoint stop) {
@@ -961,6 +968,7 @@ public class NearbyStopFragment extends Fragment {
         chipFlowScroll.setVisibility(routes.isEmpty() || !chipsExpanded ? View.GONE : View.VISIBLE);
         expandButton.setVisibility(routes.isEmpty() ? View.GONE : View.VISIBLE);
         expandButton.setText(chipsExpanded ? "⌄" : "⌃");
+        expandButton.setContentDescription(chipsExpanded ? "Свернуть список маршрутов" : "Раскрыть список маршрутов");
     }
 
     private static String typeLabel(int typeId) {
@@ -1076,6 +1084,7 @@ public class NearbyStopFragment extends Fragment {
         map = googleMap;
         map.getUiSettings().setMapToolbarEnabled(false);
         map.getUiSettings().setZoomControlsEnabled(false);
+        map.getUiSettings().setRotateGesturesEnabled(false); // badge arrows are drawn for a north-up map
         updateMapInsets();
         map.setOnMapLoadedCallback(() -> {
             mapLoaded = true;
@@ -1340,7 +1349,8 @@ public class NearbyStopFragment extends Fragment {
         for (int i = 0; i < shown.size(); i++) {
             VehiclePosition p = shown.get(i);
             String name = routeName(p.getRouteId());
-            int bucket = Double.isNaN(p.getBearing()) ? -1
+            // proto3 sends 0.0 when the vehicle has no bearing, so exactly 0.0 is treated as unknown (no arrow)
+            int bucket = Double.isNaN(p.getBearing()) || p.getBearing() == 0.0 ? -1
                     : (int) Math.round(((p.getBearing() % 360 + 360) % 360) / 22.5) % 16;
             LatLng at = new LatLng(p.getLat(), p.getLng());
             float[] anchor = stackAnchor(stacks[i]);
@@ -1366,21 +1376,19 @@ public class NearbyStopFragment extends Fragment {
 
     /** Icon anchor for the n-th marker of a pile: centred, then above, below and to the side of the real spot. */
     private static float[] stackAnchor(int n) {
-        switch (n % 4) {
-            case 1:
-                return new float[] {0.5f, 1.1f};
-            case 2:
-                return new float[] {0.5f, -0.1f};
-            case 3:
-                return new float[] {1.1f, 0.5f};
-            default:
-                return new float[] {0.5f, 0.5f};
-        }
+        return STACK_ANCHORS[n % STACK_ANCHORS.length];
     }
 
     private void hideVehicleInfo() {
         vehicleInfo.setVisibility(View.GONE);
-        tappedDevice = -1L;
+        if (raisedVehicle != null) {
+            for (VehicleMarker vm : vehicleMarkers.values()) {
+                if (vm.marker.equals(raisedVehicle)) {
+                    vm.marker.setZIndex(highlight.isSelected(vm.routeId) ? 8f : 7f);
+                }
+            }
+            raisedVehicle = null;
+        }
     }
 
     /** Compact facts about the tapped vehicle: only what the app really knows (no arrival forecast). */
@@ -1406,7 +1414,8 @@ public class NearbyStopFragment extends Fragment {
             }
             String type = r == null ? "транспорт" : typeLabel(r.getTypeId());
             String dir = data.getDirectionLabel(p.getRouteId(), p.getDirectionIndex());
-            tappedDevice = p.getDeviceId();
+            hideVehicleInfo();
+            raisedVehicle = marker;
             vehicleInfo.setText(VehicleInfoText.format(routeName(p.getRouteId()), type, dir,
                     Math.max(0L, snapshotReferenceSec - p.getTimestampSec())));
             vehicleInfo.setVisibility(View.VISIBLE);
@@ -1494,7 +1503,9 @@ public class NearbyStopFragment extends Fragment {
         }
         cv.drawRoundRect(badge, dp(9), dp(9), fill);
         cv.drawRoundRect(badge, dp(9), dp(9), ring);
-        cv.drawRoundRect(badge, dp(9), dp(9), edge);
+        RectF outer = new RectF(badge);
+        outer.inset(-dp(1.75f), -dp(1.75f));
+        cv.drawRoundRect(outer, dp(10), dp(10), edge);
         cv.drawText(label, cx, cy - (txt.descent() + txt.ascent()) / 2f, txt);
         return bmp;
     }
@@ -1510,6 +1521,7 @@ public class NearbyStopFragment extends Fragment {
     }
 
     private void enterPickMode() {
+        hideVehicleInfo();
         if (allStops.isEmpty()) {
             return;
         }
@@ -1539,6 +1551,11 @@ public class NearbyStopFragment extends Fragment {
         if (selectedStop != null) {
             drawStop();
             refreshHighlight(false);
+            if (routesLoadSkipped && data != null && data.hasRoutes()) {
+                routesLoadSkipped = false;
+                updateSubtitle("загружаем маршруты…");
+                loadRoutes(selectedStop);
+            }
             startVehiclePolling();
         } else if (map != null) {
             map.clear();
@@ -1717,8 +1734,11 @@ public class NearbyStopFragment extends Fragment {
         if (topCardView == null || dockView == null) {
             return;
         }
+        if (rootView.getHeight() == 0) {
+            return; // not laid out yet
+        }
         int top = topCardView.getBottom();
-        int bottom = rootView.getHeight() - dockView.getTop();
+        int bottom = Math.min(rootView.getHeight() - dockView.getTop(), rootView.getHeight() / 2);
         if (map != null && top >= 0 && bottom >= 0 && (top != mapPadTop || bottom != mapPadBottom)) {
             mapPadTop = top;
             mapPadBottom = bottom;

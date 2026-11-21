@@ -7,7 +7,7 @@
 
 | # | Что | Где | Зачем |
 |---|---|---|---|
-| 1 | Новый dex `classes12.dex` (34 класса: `kz.onay.nearby.logic.*`, `kz.onay.nearby.ui.*`) | добавляется в `base.apk` скриптом `scripts/add_dex.py` | код экрана «Рядом» и логики |
+| 1 | Новый dex `classes12.dex` (39 классов, включая вложенные: `kz.onay.nearby.logic.*`, `kz.onay.nearby.ui.*`) | добавляется в `base.apk` скриптом `scripts/add_dex.py` | код экрана «Рядом» и логики |
 | 2 | **Smali**: в `MainActivity.Q0(int)` ветка вкладки 2 (Life) вызывает `NearbyStopFragment.newInstance(null)` вместо `LifeFragment.newInstance()` | `smali_classes11/kz/onay/ui/main/MainActivity.smali`, `scripts/patch_smali.py` | экран «Рядом» открывается на вкладке Life; раздел купонов и партнёров Kwaaka не открывается из навигации (код Life и Kwaaka не удалён) |
 | 2a | **Smali**: в `MainActivity.onCreate(Bundle)` при холодном старте (`savedInstanceState == null`) вызывается `x1(2)` вместо `x1(1)`; регистр после вызова возвращается к 1 | `smali_classes11/kz/onay/ui/main/MainActivity.smali`, `scripts/patch_smali.py`, `tests/test_patch_smali_start_tab.py` | приложение сразу открывает вкладку Life («Рядом») вместо Cards; при повороте экрана и восстановлении процесса остаётся сохранённая вкладка |
 | 2b | **Layout**: в `res/layout/activity_main.xml` нижняя панель (`nav_routes`, `nav_profile`, `nav_life`, `nav_life_hint`, `nav_settings`), круглая кнопка QR (`nav_image_qr`, `nav_qr`) и тени (`viewShadow`, `viewBottomBorder`) получают `visibility=gone` | `scripts/patch_layout.py` | экран «Рядом» занимает весь экран; ничего не удалено: кнопка «⋯» на карточке остановки возвращает панель (карты, оплата, меню остаются доступными) |

@@ -21,10 +21,23 @@ class CameraFocusTest {
     }
 
     @Test
-    void userIsIncludedWhenKnown() {
-        List<double[]> p = CameraFocus.points(43.2, 76.9, new double[] {43.21, 76.91}, null, 1500);
+    void nearUserIsIncluded() {
+        List<double[]> p = CameraFocus.points(43.2, 76.9, new double[] {43.2010, 76.9}, null, 600);
         assertEquals(2, p.size());
-        assertEquals(43.21, p.get(1)[0], 0.0);
+        assertEquals(43.2010, p.get(1)[0], 0.0);
+    }
+
+    @Test
+    void farUserIsLeftOutSoAPickedStopInAnotherDistrictStaysInFocus() {
+        List<double[]> p = CameraFocus.points(43.2, 76.9, new double[] {43.3, 77.0}, null, 600);
+        assertEquals(1, p.size());
+    }
+
+    @Test
+    void userExactlyAtTheRadiusIsIncluded() {
+        double d = Haversine.distanceMeters(43.2, 76.9, 43.2100, 76.9);
+        assertEquals(2, CameraFocus.points(43.2, 76.9, new double[] {43.2100, 76.9}, null, d).size());
+        assertEquals(1, CameraFocus.points(43.2, 76.9, new double[] {43.2100, 76.9}, null, d - 0.01).size());
     }
 
     @Test

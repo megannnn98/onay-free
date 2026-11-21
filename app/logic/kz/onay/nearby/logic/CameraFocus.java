@@ -12,12 +12,14 @@ public final class CameraFocus {
     private CameraFocus() {
     }
 
-    /** Points as {lat, lng}. Vehicles farther than {@code vehicleRadiusMeters} from the stop are left out. */
+    /** Points as {lat, lng}. The user and vehicles farther than {@code vehicleRadiusMeters} from the stop are left out. */
     public static List<double[]> points(double stopLat, double stopLng, double[] user,
             List<VehiclePosition> routeVehicles, double vehicleRadiusMeters) {
         List<double[]> out = new ArrayList<>();
         out.add(new double[] {stopLat, stopLng});
-        if (user != null) {
+        // The user counts only when near the stop: someone who picked a stop in another district must not
+        // get a map zoomed out to cover both places.
+        if (user != null && Haversine.distanceMeters(stopLat, stopLng, user[0], user[1]) <= vehicleRadiusMeters) {
             out.add(new double[] {user[0], user[1]});
         }
         if (routeVehicles != null) {
