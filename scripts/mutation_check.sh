@@ -89,6 +89,5 @@ run_mutant focus-no-radius    CameraFocus.java           "v.getLng()) <= vehicle
 run_mutant info-no-direction  VehicleInfoText.java       "directionLabel != null && !directionLabel.trim().isEmpty()" "false"
 run_mutant info-no-trim       VehicleInfoText.java       "sb.append(\" · \").append(directionLabel.trim());" "sb.append(\" · \").append(directionLabel);"
 run_mutant info-age-edge      VehicleInfoText.java       "reportAgeSec <= 0" "reportAgeSec < 0"
-run_mutant line-visible-all   RouteHighlightState.java   "return isSelected(routeId);"  "return true;"
 echo "survivors: $survived"
 [ "$survived" -eq 0 ]

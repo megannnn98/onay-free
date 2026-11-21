@@ -106,6 +106,8 @@ public class NearbyStopFragment extends Fragment {
     private static final int VEHICLE_FAILURES_BEFORE_NOTE = 3;
     private static final double OVERVIEW_LAT_SPAN = 0.0030; // about 330 m
     private static final double OVERVIEW_LNG_SPAN = 0.0040; // about 330 m at this latitude
+    /** GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE: the nested type is not on the compile-only classpath. */
+    private static final int REASON_GESTURE = 1;
     private static final double CAMERA_VEHICLE_RADIUS_METERS = 1500.0;
     private static final double STACK_RADIUS_METERS = 25.0;
     private static final long LOCATION_TIMEOUT_MS = 15_000L;
@@ -180,6 +182,9 @@ public class NearbyStopFragment extends Fragment {
     private boolean mapLoaded;
     private CameraUpdate pendingCamera;
     private boolean pickMode;
+    private boolean cameraAuto = true;
+    private int mapPadTop = -1;
+    private int mapPadBottom = -1;
     private long tappedDevice = -1L;
     private long snapshotReferenceSec;
 
@@ -795,6 +800,7 @@ public class NearbyStopFragment extends Fragment {
     private void showStop(StopPoint stop, double distanceMeters) {
         stopVehiclePolling();
         clearVehicles();
+        cameraAuto = true;
         selectedStop = stop;
         selectedDistance = distanceMeters;
         routes = Collections.emptyList();
@@ -960,6 +966,22 @@ public class NearbyStopFragment extends Fragment {
         return typeId == RouteInfo.TYPE_TROLLEYBUS ? "троллейбус" : "автобус";
     }
 
+    /**
+     * Routes often share a street. Lines get different widths (the first route is the widest and lies at the
+     * bottom), so the colours of all routes stay visible side by side instead of the top one hiding the rest.
+     */
+    private int lineWidthOf(long routeId, boolean selected) {
+        Integer idx = colorIndex.get(routeId);
+        int n = Math.max(1, routes.size());
+        int base = dp(4) + ((n - 1) - (idx == null ? 0 : idx)) * dp(3);
+        return selected ? dp(4) + (n - 1) * dp(3) + dp(3) : base;
+    }
+
+    private float lineZOf(long routeId) {
+        Integer idx = colorIndex.get(routeId);
+        return 1f + (idx == null ? 0 : idx) / 100f;
+    }
+
     /** Colours follow the order of routes at the stop, so routes shown together never share a colour. */
     private int colorOf(long routeId) {
         Integer idx = colorIndex.get(routeId);
@@ -979,16 +1001,14 @@ public class NearbyStopFragment extends Fragment {
             List<Polyline> pl = polylines.get(id);
             if (pl != null) {
                 for (Polyline p : pl) {
-                    p.setVisible(highlight.isLineVisible(id));
                     p.setColor(withAlpha(colorOf(id), alpha));
-                    p.setWidth(sel ? dp(8) : dp(4));
-                    p.setZIndex(sel ? 3f : 1f);
+                    p.setWidth(lineWidthOf(id, sel));
+                    p.setZIndex(sel ? 3f : lineZOf(id));
                 }
             }
             List<Marker> ms = arrows.get(id);
             if (ms != null) {
                 for (Marker m : ms) {
-                    m.setVisible(highlight.isLineVisible(id));
                     m.setAlpha(alpha);
                     m.setZIndex(sel ? 4f : 2f);
                 }
@@ -1063,6 +1083,11 @@ public class NearbyStopFragment extends Fragment {
                 pendingCamera = null;
             }
         });
+        map.setOnCameraMoveStartedListener(reason -> {
+            if (reason == REASON_GESTURE) {
+                cameraAuto = false; // the user took the map: later layout changes must not move it
+            }
+        });
         map.setOnMapClickListener(latLng -> hideVehicleInfo());
         map.setOnMarkerClickListener(marker -> {
             StopPoint s = pickMarkers.get(marker);
@@ -1110,7 +1135,8 @@ public class NearbyStopFragment extends Fragment {
                 if (!servesStop || !line.isDrawable()) {
                     continue;
                 }
-                PolylineOptions po = new PolylineOptions().color(color).width(dp(4)).geodesic(false).visible(false);
+                PolylineOptions po = new PolylineOptions().color(color).width(lineWidthOf(id, false)).geodesic(false)
+                        .zIndex(lineZOf(id));
                 for (int i = 0; i < line.size(); i++) {
                     po.add(new LatLng(line.getLat(i), line.getLng(i)));
                 }
@@ -1123,7 +1149,7 @@ public class NearbyStopFragment extends Fragment {
                 int last = line.size() - 1;
                 ms.add(map.addMarker(new MarkerOptions()
                         .position(new LatLng(line.getLat(last), line.getLng(last)))
-                        .icon(icon).anchor(0.5f, 0.5f).flat(true).visible(false)
+                        .icon(icon).anchor(0.5f, 0.5f).flat(true)
                         .rotation((float) line.finalBearing())));
                 used.add(line);
             }
@@ -1256,7 +1282,7 @@ public class NearbyStopFragment extends Fragment {
                 if (result == null) {
                     vehicleFailures++;
                     if (vehicleFailures >= VEHICLE_FAILURES_BEFORE_NOTE) {
-                        vehicleNote.setText("Позиции транспорта недоступны, линии маршрутов показаны");
+                        vehicleNote.setText("Нет связи: показаны последние известные позиции, они могут устареть");
                     }
                     return;
                 }
@@ -1684,8 +1710,13 @@ public class NearbyStopFragment extends Fragment {
         }
         int top = topCardView.getBottom();
         int bottom = rootView.getHeight() - dockView.getTop();
-        if (map != null && top >= 0 && bottom >= 0) {
+        if (map != null && top >= 0 && bottom >= 0 && (top != mapPadTop || bottom != mapPadBottom)) {
+            mapPadTop = top;
+            mapPadBottom = bottom;
             map.setPadding(0, top, 0, bottom);
+            if (cameraAuto && selectedStop != null && !pickMode) {
+                fitCamera(highlight.getSelectedRouteId()); // the free part of the map changed: centre again
+            }
         }
         if (fabLp != null && bottom >= 0 && fabLp.bottomMargin != bottom + dp(12)) {
             fabLp.bottomMargin = bottom + dp(12);
@@ -1704,6 +1735,14 @@ public class NearbyStopFragment extends Fragment {
      */
     private void toggleOriginalNavigation() {
         originalNavigationShown = !originalNavigationShown;
+        applyOriginalNavigation();
+    }
+
+    /** Called also on every resume: the host activity may restore its bar (for example after being recreated). */
+    private void applyOriginalNavigation() {
+        if (rootView == null) {
+            return;
+        }
         Context c = requireContext();
         for (String name : ORIGINAL_NAVIGATION_IDS) {
             int id = c.getResources().getIdentifier(name, "id", c.getPackageName());
@@ -1743,6 +1782,7 @@ public class NearbyStopFragment extends Fragment {
     public void onResume() {
         super.onResume();
         mapView.onResume();
+        applyOriginalNavigation();
         if (!routes.isEmpty() && !pickMode) {
             startVehiclePolling();
         }
@@ -1802,6 +1842,12 @@ public class NearbyStopFragment extends Fragment {
         mapLoaded = false;
         pendingCamera = null;
         pickMode = false;
+        cameraAuto = true;
+        mapPadTop = -1;
+        mapPadBottom = -1;
+        rootView = null;
+        topCardView = null;
+        dockView = null;
         polylines.clear();
         arrows.clear();
         chips.clear();

@@ -37,11 +37,6 @@ public final class RouteHighlightState {
         }
     }
 
-    /** A route line is drawn only for the selected route: all lines at once would cover the map. */
-    public boolean isLineVisible(long routeId) {
-        return isSelected(routeId);
-    }
-
     public float alphaFor(long routeId) {
         return selectedRouteId == null || selectedRouteId == routeId ? FULL_ALPHA : DIM_ALPHA;
     }
