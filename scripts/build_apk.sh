@@ -77,3 +77,9 @@ done
 python3 -I -c 'import glob,os,sys
 for p in glob.glob(os.path.join(sys.argv[1], "*.idsig")): os.remove(p)' "$OUT_DIR"
 echo "done: $(ls "$OUT_DIR"/*.apk | wc -l) apk files in $OUT_DIR"
+
+# Produce a conventional, directly installable APK for releases.
+# Keep the split build as an escape hatch for diagnosing merge problems.
+if [ "${ONAY_BUILD_UNIVERSAL:-1}" = "1" ]; then
+  SPLITS_INPUT="$OUT_DIR" bash "$ROOT/scripts/build_universal_apk.sh"
+fi
