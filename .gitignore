@@ -3,3 +3,18 @@ work/
 *.apk
 *.jks
 __pycache__/
+# IDE and local files
+.idea/
+*.iml
+.vscode/
+.DS_Store
+local.properties
+# Secrets and signing material must never be committed
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+signing.env
+.env
+.env.*

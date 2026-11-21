@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  scripts:
+    name: Scripts and packaging tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Syntax-check every shell script
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do bash -n "$f"; done
+      - name: ShellCheck (errors only)
+        run: shellcheck --severity=error scripts/*.sh
+      - name: Packaging, patch and workflow tests
+        run: python3 -I -m unittest discover -s tests -v
+
+  jvm:
+    name: JVM unit tests and mutation check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Fetch JUnit console launcher (checksum pinned)
+        run: |
+          set -euo pipefail
+          mkdir -p work/libs
+          curl -fsSL -o work/libs/junit-console.jar \
+            https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.11.4/junit-platform-console-standalone-1.11.4.jar
+          echo "b016ef6b1c3454d6d7c2c88ce081dabf289699686af6622d6e4e2e1b54b4a2fc  work/libs/junit-console.jar" | sha256sum -c -
+      - name: Unit tests of the pure-logic layer
+        run: bash scripts/run_unit_tests.sh
+      - name: Mutation check (every mutant must be killed)
+        run: bash scripts/mutation_check.sh

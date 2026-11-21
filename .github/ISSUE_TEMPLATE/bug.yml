@@ -1,0 +1,24 @@
+name: Ошибка
+description: Что-то работает не так
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Версия onay-free
+      placeholder: "0.0.3"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Устройство и версия Android
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Что сделали и что получилось
+      description: Шаги, ожидаемое и фактическое поведение. Скриншоты без личных данных (местоположение, номер, аккаунт).
+    validations:
+      required: true
