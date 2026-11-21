@@ -30,8 +30,10 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
@@ -100,6 +102,7 @@ public class NearbyStopFragment extends Fragment {
     private static final double OVERVIEW_LAT_SPAN = 0.0030; // about 330 m
     private static final double OVERVIEW_LNG_SPAN = 0.0040; // about 330 m at this latitude
     private static final long LOCATION_TIMEOUT_MS = 15_000L;
+    private static final long BUTTON_LOCATION_TIMEOUT_MS = 8_000L;
     private static final long LOCATION_POLL_MS = 400L;
     private static final long MAX_FIX_AGE_MS = 120_000L;
     private static final int[] PALETTE = {
@@ -151,6 +154,8 @@ public class NearbyStopFragment extends Fragment {
     private int vehicleFailures;
     private List<VehiclePosition> shownVehicles = Collections.emptyList();
     private TextView pickHint;
+    private ImageView myLocationButton;
+    private Marker userMarker;
     private Button changeStopButton;
     private MapView mapView;
     private GoogleMap map;
@@ -270,6 +275,20 @@ public class NearbyStopFragment extends Fragment {
         pickHint.setVisibility(View.GONE);
         mapFrame.addView(pickHint, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP));
+        myLocationButton = new ImageView(c);
+        myLocationButton.setImageBitmap(myLocationBitmap());
+        myLocationButton.setScaleType(ImageView.ScaleType.CENTER);
+        myLocationButton.setContentDescription("Моё местоположение");
+        GradientDrawable fabBg = new GradientDrawable();
+        fabBg.setShape(GradientDrawable.OVAL);
+        fabBg.setColor(Color.WHITE);
+        fabBg.setStroke(dp(1), 0x33000000);
+        myLocationButton.setBackground(fabBg);
+        myLocationButton.setElevation(dp(4));
+        myLocationButton.setOnClickListener(v -> onMyLocationClicked());
+        FrameLayout.LayoutParams fabLp = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.BOTTOM | Gravity.END);
+        fabLp.setMargins(0, 0, dp(12), dp(124)); // above the map's zoom buttons
+        mapFrame.addView(myLocationButton, fabLp);
         root.addView(mapFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         LinearLayout bottomBar = new LinearLayout(c);
@@ -382,7 +401,7 @@ public class NearbyStopFragment extends Fragment {
                     startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)));
             return;
         }
-        startLocationWatch();
+        startLocationWatch(false);
     }
 
     private boolean hasLocationPermission() {
@@ -430,11 +449,13 @@ public class NearbyStopFragment extends Fragment {
     }
 
     /** Uses the app's own location helper; its state is read by polling, with a timeout. */
-    private void startLocationWatch() {
+    private void startLocationWatch(final boolean forButton) {
         locationHelper = new MyLocationRequestHelper(requireActivity());
         getViewLifecycleOwner().getLifecycle().addObserver(locationHelper);
-        locationDeadline = SystemClock.elapsedRealtime() + LOCATION_TIMEOUT_MS;
-        showStatus("Определяем местоположение…", null, null);
+        locationDeadline = SystemClock.elapsedRealtime() + (forButton ? BUTTON_LOCATION_TIMEOUT_MS : LOCATION_TIMEOUT_MS);
+        if (!forButton) {
+            showStatus("Определяем местоположение…", null, null);
+        }
         final int gen = generation;
         handler.postDelayed(new Runnable() {
             @Override
@@ -450,11 +471,18 @@ public class NearbyStopFragment extends Fragment {
                     Log.i(TAG, "fix ok, accuracy " + loc.getAccuracy() + " m, age "
                             + (System.currentTimeMillis() - loc.getTime()) + " ms");
                     stopLocationWatch();
-                    onLocation(loc.getLatitude(), loc.getLongitude());
+                    if (forButton) {
+                        locationNote = null;
+                        onMyLocation(loc.getLatitude(), loc.getLongitude());
+                    } else {
+                        onLocation(loc.getLatitude(), loc.getLongitude());
+                    }
                 } else if (SystemClock.elapsedRealtime() > locationDeadline) {
                     Log.w(TAG, "no usable fix: " + v);
                     stopLocationWatch();
-                    if (v == LocationQuality.Verdict.STALE && loc != null) {
+                    if (forButton) {
+                        finishButtonSearchWithoutFreshFix(v, loc);
+                    } else if (v == LocationQuality.Verdict.STALE && loc != null) {
                         offerStaleLocation(loc);
                     } else {
                         noLocation("Не удалось определить местоположение. Повторите или выберите остановку вручную.",
@@ -465,6 +493,98 @@ public class NearbyStopFragment extends Fragment {
                 }
             }
         }, LOCATION_POLL_MS);
+    }
+
+    // ---------- "my location" button ----------
+
+    /** Finds the user again and centres the map on them, without reloading stops or routes. */
+    private void onMyLocationClicked() {
+        if (mapView == null || data == null || locationHelper != null) {
+            return; // not ready, or a search is already running
+        }
+        if (testMode) {
+            double[] u = ((TestData) data).getUserLocation();
+            if (u == null) {
+                Toast.makeText(requireContext(), "Геолокация недоступна", Toast.LENGTH_SHORT).show();
+            } else {
+                onMyLocation(u[0], u[1]);
+            }
+            return;
+        }
+        if (!hasLocationPermission()) {
+            permissionAsked = true;
+            requestPermissions(new String[] {
+                Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_LOCATION);
+            return;
+        }
+        if (!isLocationEnabled()) {
+            recheckOnResume = true;
+            showStatus("Геолокация выключена. Включите её, чтобы найти вас на карте.", "Включить", () ->
+                    startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)));
+            return;
+        }
+        setMyLocationBusy(true);
+        Toast.makeText(requireContext(), "Определяем местоположение…", Toast.LENGTH_SHORT).show();
+        startLocationWatch(true);
+    }
+
+    private void setMyLocationBusy(boolean busy) {
+        myLocationButton.setEnabled(!busy);
+        myLocationButton.setAlpha(busy ? 0.5f : 1f);
+    }
+
+    /** Moves the "you are here" marker, refreshes the distance to the selected stop and centres the camera. */
+    private void onMyLocation(double lat, double lng) {
+        setMyLocationBusy(false);
+        userLoc = new double[] {lat, lng};
+        LatLng at = new LatLng(lat, lng);
+        if (map != null) {
+            if (userMarker != null) {
+                userMarker.setPosition(at);
+            } else {
+                addUserMarker();
+            }
+            moveTo(CameraUpdateFactory.newLatLngZoom(at, 16f), true);
+        }
+        if (selectedStop != null) {
+            selectedDistance = Haversine.distanceMeters(lat, lng, selectedStop.getLat(), selectedStop.getLng());
+            updateSubtitleNote();
+        }
+    }
+
+    /** No fresh fix in time: shows the last known position with its age, or says that none was found. */
+    private void finishButtonSearchWithoutFreshFix(LocationQuality.Verdict verdict, @Nullable Location loc) {
+        setMyLocationBusy(false);
+        if (verdict == LocationQuality.Verdict.STALE && loc != null) {
+            String age = AgeText.ago(System.currentTimeMillis() - loc.getTime());
+            locationNote = age;
+            onMyLocation(loc.getLatitude(), loc.getLongitude());
+            Toast.makeText(requireContext(), "Свежей координаты нет, показано положение: " + age,
+                    Toast.LENGTH_LONG).show();
+        } else {
+            Toast.makeText(requireContext(), "Не удалось определить местоположение", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** A crosshair icon for the button. */
+    private Bitmap myLocationBitmap() {
+        int size = dp(28);
+        float c = size / 2f;
+        Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas cv = new Canvas(bmp);
+        Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
+        line.setStyle(Paint.Style.STROKE);
+        line.setColor(0xFF1565C0);
+        line.setStrokeWidth(dp(2));
+        cv.drawCircle(c, c, dp(8), line);
+        cv.drawLine(c, dp(1), c, dp(6), line);
+        cv.drawLine(c, size - dp(6), c, size - dp(1), line);
+        cv.drawLine(dp(1), c, dp(6), c, line);
+        cv.drawLine(size - dp(6), c, size - dp(1), c, line);
+        Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
+        dot.setColor(0xFF1565C0);
+        cv.drawCircle(c, c, dp(3.5f), dot);
+        return bmp;
     }
 
     /** No fresh fix: lets the user decide whether the last known position is good enough, showing its age. */
@@ -883,7 +1003,7 @@ public class NearbyStopFragment extends Fragment {
 
     private void addUserMarker() {
         if (map != null && userLoc != null) {
-            map.addMarker(new MarkerOptions().position(new LatLng(userLoc[0], userLoc[1])).title("Вы здесь")
+            userMarker = map.addMarker(new MarkerOptions().position(new LatLng(userLoc[0], userLoc[1])).title("Вы здесь")
                     .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)).zIndex(5f));
         }
     }
@@ -1147,6 +1267,10 @@ public class NearbyStopFragment extends Fragment {
 
     /** Leaves manual selection without touching the map content. */
     private void leavePickState() {
+        for (Marker m : pickMarkers.keySet()) {
+            m.remove(); // never leave the orange "pick a stop" markers behind when selection ends
+        }
+        pickMarkers.clear();
         pickMode = false;
         pickHint.setVisibility(View.GONE);
         changeStopButton.setText("Сменить остановку");
@@ -1335,6 +1459,7 @@ public class NearbyStopFragment extends Fragment {
         }
         mapView = null;
         map = null;
+        userMarker = null;
         mapLoaded = false;
         pendingCamera = null;
         pickMode = false;
