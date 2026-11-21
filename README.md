@@ -107,6 +107,7 @@ python3 -m unittest discover -s tests -v
 - [`ONAY_REVERSE_ENGINEERING.md`](ONAY_REVERSE_ENGINEERING.md): как устроено оригинальное приложение и почему выбран подход с минимальными правками.
 - [`IMPLEMENTATION_REPORT.md`](IMPLEMENTATION_REPORT.md): журнал реализации и что проверено на устройстве.
 - [`docs/PATCHES.md`](docs/PATCHES.md): список правок оригинала.
+- [`docs/CLONE_COMPATIBILITY.md`](docs/CLONE_COMPATIBILITY.md): условия независимой установки двух приложений, риски и тесты на устройстве.
 
 ## Известные ограничения
 
@@ -125,6 +126,8 @@ python3 -m unittest discover -s tests -v
 - До теста на реальном устройстве выбирайте `prerelease=true`; требования: совместная установка двух пакетов, запуск и отображение автобусов, авторизация, карта, платежи (если используются), обновление оригинального приложения.
 - Поле `prerelease` держите включённым, пока APK не проверен на устройстве.
 - Заметки релиза берутся из `docs/release-notes-template.md` вместе с SHA-256.
+
+Если пароль от старого `test.jks` потерян, **один раз** выполните `bash scripts/setup_release_key.sh` на своём ПК (нужны `keytool` и авторизованный `gh`). Скрипт создаёт новый `work/keys/onay-free-release.jks`, защищает его паролем и загружает секреты в GitHub. Сделайте резервную копию ключа и пароля. При ручном запуске release workflow выберите `new_signing_key=true` и `prerelease=true`.
 
 Секреты репозитория: `ONAY_KEYSTORE_B64` (keystore в base64), `ONAY_KS_PASS`, `ONAY_KS_ALIAS`. Сам keystore и пароль в репозиторий не попадают (`*.jks` в `.gitignore`); храните резервную копию вне репозитория. Подпись и упаковку защищают тесты `tests/test_workflow_security.py` и `tests/test_verify_universal_apk.py`.
 
