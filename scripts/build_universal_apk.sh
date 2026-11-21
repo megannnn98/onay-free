@@ -124,9 +124,13 @@ if [ "$ONAY_PACKAGE_NAME" = "kz.onay.free" ]; then
       apktool -JXmx6g "$@"
     fi
   }
-  run_apktool d -f -r -s -o "$work/decoded" "$unsigned"
+  # -s keeps original DEX; apktool decodes the manifest only if -r is NOT used.
+  # apktool may recompile resources. Never ship these: transplant its *compiled*
+  # manifest back into the original APK to preserve all other payload bytes.
+  run_apktool d -f -s -o "$work/decoded" "$unsigned"
   python3 -I "$ROOT/scripts/patch_clone_manifest.py" "$work/decoded/AndroidManifest.xml"
-  run_apktool b -f -o "$work/cloned-unsigned.apk" "$work/decoded"
+  run_apktool b -f -o "$work/clone-rebuilt.apk" "$work/decoded"
+  python3 -I "$ROOT/scripts/replace_compiled_manifest.py" "$unsigned" "$work/clone-rebuilt.apk" "$work/cloned-unsigned.apk"
   python3 -I "$ROOT/scripts/verify_clone_payload.py" "$unsigned" "$work/cloned-unsigned.apk"
   unsigned="$work/cloned-unsigned.apk"
   actual_package="$(aapt2 dump badging "$unsigned" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1)"
