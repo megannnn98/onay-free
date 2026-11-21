@@ -10,6 +10,8 @@
 #   ONAY_KS_PASS   keystore and key password
 #   ONAY_KS_ALIAS  key alias (default: test)
 # Optional: ORIG_DIR (default work/apks), OUT_DIR (default work/out)
+#   ONAY_DEBUG_ACTIVITY=1  also adds the exported debug activity (adb entry point with test data and
+#                          location override); the default release build has no such entry point.
 # Needs a dex produced by scripts/build_dex.sh (work/nearby-dex/classes.dex).
 set -euo pipefail
 
@@ -38,8 +40,13 @@ echo "[1/6] decode"
 apktool -JXmx10g d -f -o "$WORK/decoded" "$ORIG_DIR/base.apk" >"$WORK/decode.log" 2>&1 \
   || { tail -20 "$WORK/decode.log" >&2; exit 1; }
 
-echo "[2/6] patch manifest"
-python3 -I "$ROOT/scripts/patch_manifest.py" "$WORK/decoded/AndroidManifest.xml"
+echo "[2/6] patch smali and manifest"
+python3 -I "$ROOT/scripts/patch_smali.py" "$WORK/decoded"
+if [ "${ONAY_DEBUG_ACTIVITY:-0}" = "1" ]; then
+  python3 -I "$ROOT/scripts/patch_manifest.py" "$WORK/decoded/AndroidManifest.xml"
+else
+  echo "release build: no debug activity in the manifest"
+fi
 
 echo "[3/6] build"
 apktool -JXmx10g b -f -o "$WORK/base_built.apk" "$WORK/decoded" >"$WORK/build.log" 2>&1 \

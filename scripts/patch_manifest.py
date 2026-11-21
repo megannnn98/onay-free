@@ -1,4 +1,4 @@
-"""Adds the stage 2 debug activity to a decoded AndroidManifest.xml.
+"""Adds the debug activity to a decoded AndroidManifest.xml (debug builds only, see build_apk.sh).
 
 Every manifest change is listed here and in docs/PATCHES.md.
 """
