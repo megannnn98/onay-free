@@ -145,6 +145,19 @@ class UniversalApkTest(unittest.TestCase):
         self.assertIn('clone built as kz.onay', result.stderr)
         self.assertFalse(self.output.exists())
 
+    def test_repackages_existing_latest_single_apk(self):
+        source = self.path / 'onay-free-0.0.4.apk'
+        with zipfile.ZipFile(source, 'w') as z:
+            for name in ('AndroidManifest.xml', 'classes.dex', 'resources.arsc',
+                         'lib/arm64-v8a/libfake.so'):
+                z.writestr(name, b'original bytes')
+        result = self.run_build(SPLITS_INPUT=str(source), ONAY_PACKAGE_NAME='kz.onay.free')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(self.output) as apk:
+            self.assertIn('package="kz.onay.free"', apk.read('AndroidManifest.xml').decode())
+            self.assertEqual(apk.read('classes.dex'), b'original bytes')
+        self.assertNotIn('java -Xmx6g', self.log.read_text())
+
     def test_missing_base_fails_without_output(self):
         (self.split_dir / 'base.apk').unlink()
         result = self.run_build()
