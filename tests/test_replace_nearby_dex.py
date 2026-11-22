@@ -19,8 +19,8 @@ class ReplaceNearbyDexTest(unittest.TestCase):
         self.src = self.root / "source.apk"
         self.dex = self.root / "compiled.dex"
         self.out = self.root / "unsigned.apk"
-        self.original = b"dex\n035\x00" + module.NEARBY_CLASS + b"old implementation"
-        self.replacement = b"dex\n035\x00" + module.NEARBY_CLASS + module.NEW_CORRIDOR_CLASS
+        self.original = b"dex\n035\x00" + module.NEARBY_CLASS + module.EXTENSION_LOGIC_CLASS + b"old implementation"
+        self.replacement = b"dex\n035\x00" + module.NEARBY_CLASS + module.EXTENSION_LOGIC_CLASS + module.NEW_CORRIDOR_CLASS
         self.dex.write_bytes(self.replacement)
         with zipfile.ZipFile(self.src, "w") as archive:
             archive.writestr("AndroidManifest.xml", b"manifest")
@@ -54,11 +54,6 @@ class ReplaceNearbyDexTest(unittest.TestCase):
             module.replace(self.src, self.dex, self.out)
 
     def test_rejects_already_patched_source(self):
-        with zipfile.ZipFile(self.src, "a") as archive:
-            archive.writestr("classes13.dex", b"dex\n" + module.NEW_CORRIDOR_CLASS)
-        with zipfile.ZipFile(self.src) as archive:
-            # The source's actual extension dex must contain the corridor marker.
-            pass
         self.src.unlink()
         with zipfile.ZipFile(self.src, "w") as archive:
             archive.writestr("classes.dex", b"dex\nmain")
