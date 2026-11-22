@@ -17,13 +17,13 @@ def replace(source: Path, compiled_dex: Path, output: Path) -> str:
     if not source.is_file() or not compiled_dex.is_file():
         raise ValueError("source APK or replacement DEX is missing")
     fresh = compiled_dex.read_bytes()
-    if not fresh.startswith(b"dex\\n"):
+    if not fresh.startswith(b"dex\n"):
         raise ValueError("replacement file is not a DEX")
     if NEARBY_CLASS not in fresh or NEW_CORRIDOR_CLASS not in fresh:
         raise ValueError("compiled DEX does not contain the new Nearby UI and corridor logic")
 
     with zipfile.ZipFile(source, "r") as zin:
-        dex_names = [n for n in zin.namelist() if re.fullmatch(r"classes(?:\\d+)?\\.dex", n)]
+        dex_names = [n for n in zin.namelist() if re.fullmatch(r"classes(?:\d+)?\.dex", n)]
         if not dex_names:
             raise ValueError("source APK has no DEX files")
         extension = [n for n in dex_names if NEARBY_CLASS in zin.read(n)]
