@@ -40,10 +40,11 @@ echo "[1/6] decode"
 apktool -JXmx10g d -f -o "$WORK/decoded" "$ORIG_DIR/base.apk" >"$WORK/decode.log" 2>&1 \
   || { tail -20 "$WORK/decode.log" >&2; exit 1; }
 
-echo "[2/6] patch smali, ads, layout and manifest"
+echo "[2/6] patch smali, ads, layout, app icon and manifest"
 python3 -I "$ROOT/scripts/patch_smali.py" "$WORK/decoded"
 python3 -I "$ROOT/scripts/patch_ads.py" "$WORK/decoded"
 python3 -I "$ROOT/scripts/patch_layout.py" "$WORK/decoded"
+python3 -I "$ROOT/scripts/patch_app_icon.py" "$WORK/decoded"
 # AppDataSource reads this generated Dagger field by name: fail the build, not the screen on the device.
 grep -rq -- "^\.field .*provideInterceptorProvider:" "$WORK"/decoded/smali*/kz/onay/di/ \
   || { echo "field provideInterceptorProvider not found in kz/onay/di (R8 renamed it?)" >&2; exit 1; }
