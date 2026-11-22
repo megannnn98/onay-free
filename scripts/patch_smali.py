@@ -6,6 +6,10 @@ The transport tab (0) keeps the original RoutesFragment, so the original transpo
 MainActivity.onCreate(Bundle): on a cold start (savedInstanceState == null) the original selects tab 1 (Cards);
 it now selects tab 2 (Life, the "Рядом" screen). Rotation and process restore keep the saved tab.
 
+Access code (the quick-entry PIN of ONAY!) is switched off: MainActivity.showAccessCodeSetDialog() (the prompt
+"create an access code" one second after a start) and BaseSecondaryActivity.Q() (the dialog asking for the code
+when the app returns from the background) return immediately.
+
 Each replacement must match exactly once, otherwise the build stops: a changed app version must not
 be patched silently.
 """
@@ -52,6 +56,37 @@ def patch_start_tab(text: str) -> str:
     return text[:start] + body[:m.start()] + new + body[m.end():] + text[end:]
 
 
+ACCESS_CODE_PATCHES = (
+    # (file under smali*/, method signature line, .locals line)
+    ("kz/onay/ui/main/MainActivity.smali", ".method public showAccessCodeSetDialog()V"),
+    ("kz/onay/ui/base/BaseSecondaryActivity.smali", ".method public final Q()V"),
+)
+
+
+def return_at_start(text: str, signature: str) -> str:
+    """The method returns immediately: `return-void` right after its .locals line (found exactly once)."""
+    pattern = re.compile(r"(?m)^(%s\n    \.locals \d+\n)" % re.escape(signature))
+    found = pattern.findall(text)
+    if len(found) != 1:
+        sys.exit("access code: expected 1 '%s', found %d" % (signature, len(found)))
+    if re.search(r"(?m)^%s\n    \.locals \d+\n    return-void\n" % re.escape(signature), text):
+        sys.exit("access code: %s is already patched" % signature)
+    return pattern.sub(lambda m: m.group(1) + "    return-void\n", text, count=1)
+
+
+def patch_access_code(decoded_dir: str) -> None:
+    for relative, signature in ACCESS_CODE_PATCHES:
+        matches = glob.glob(os.path.join(decoded_dir, "smali*", *relative.split("/")))
+        if len(matches) != 1:
+            sys.exit("access code: expected exactly one %s, found %d" % (relative, len(matches)))
+        with open(matches[0], encoding="utf-8") as f:
+            text = f.read()
+        text = return_at_start(text, signature)
+        with open(matches[0], "w", encoding="utf-8") as f:
+            f.write(text)
+        print("smali patched: %s returns immediately (access code off)" % signature[len(".method public "):])
+
+
 def main(decoded_dir: str) -> None:
     matches = glob.glob(os.path.join(decoded_dir, "smali*", "kz", "onay", "ui", "main", "MainActivity.smali"))
     if len(matches) != 1:
@@ -77,6 +112,7 @@ def main(decoded_dir: str) -> None:
     print("smali patched: MainActivity.onCreate cold start -> tab 2 (Life)")
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
+    patch_access_code(decoded_dir)
 
 
 if __name__ == "__main__":
