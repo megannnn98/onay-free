@@ -38,5 +38,22 @@ class NoMenuButton(unittest.TestCase):
         self.assertLess(tail.index("originalNavigationShown = false;"), tail.index("applyOriginalNavigation();"))
 
 
+class NavigationLookup(unittest.TestCase):
+    """The resource table keeps the package "kz.onay" while the application id is "kz.onay.free"."""
+
+    def test_ids_are_looked_up_in_the_resource_package_first(self):
+        text = source()
+        self.assertIn('RESOURCE_PACKAGE = "kz.onay"', text)
+        lookup = body(text, "private static int navigationId(")
+        self.assertLess(lookup.index("RESOURCE_PACKAGE"), lookup.index("getPackageName()"))
+
+    def test_no_other_lookup_uses_the_application_id_alone(self):
+        text = source()
+        calls = re.findall(r'getIdentifier\([^;]*\);', text)
+        self.assertEqual(len(calls), 2, "only navigationId resolves ids by name")
+        for call in calls:
+            self.assertTrue("RESOURCE_PACKAGE" in call or "getPackageName()" in call)
+
+
 if __name__ == "__main__":
     unittest.main()
