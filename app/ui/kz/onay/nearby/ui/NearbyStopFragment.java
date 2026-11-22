@@ -1781,20 +1781,29 @@ public class NearbyStopFragment extends Fragment {
             return;
         }
         Context c = requireContext();
+        boolean shown = originalNavigationShown || keepsOriginalNavigation(c);
         int found = 0;
         for (String name : ORIGINAL_NAVIGATION_IDS) {
             int id = navigationId(c, name);
             View v = id == 0 ? null : requireActivity().findViewById(id);
             if (v != null) {
                 found++;
-                v.setVisibility(originalNavigationShown ? View.VISIBLE : View.GONE);
+                v.setVisibility(shown ? View.VISIBLE : View.GONE);
             }
         }
         if (found == 0) {
             Log.e(TAG, "none of the original navigation views was found (resource package changed?)");
         }
         // The round QR button reaches above the container when the bar is shown.
-        rootView.setPadding(0, 0, 0, originalNavigationShown ? dp(44) : 0);
+        rootView.setPadding(0, 0, 0, shown ? dp(44) : 0);
+    }
+
+    /**
+     * The kz.onay variant keeps the original bottom bar and payment (the layout is not patched, see
+     * ONAY_VARIANT=full in build_apk.sh); the kz.onay.free variant is the map only.
+     */
+    private static boolean keepsOriginalNavigation(Context c) {
+        return RESOURCE_PACKAGE.equals(c.getPackageName());
     }
 
     /** Package name inside the resource table of ONAY! 3.6.5; the application id of this build differs from it. */

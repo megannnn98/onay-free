@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install the independent single APK. Legacy split installation is opt-in only.
+# Install a single APK: kz.onay.free (next to the official ONAY!) or kz.onay (replaces it, see build_release_apks.sh).
+# Legacy split installation is opt-in only.
 # Usage: scripts/install.sh [path/to/onay-free.apk | --legacy-splits]
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,9 +18,16 @@ else
   [ -f "$APK" ] || { echo "missing APK: $APK" >&2; exit 1; }
   command -v aapt2 >/dev/null || { echo "aapt2 is required to verify app identity" >&2; exit 1; }
   actual_package="$(aapt2 dump badging "$APK" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1)"
-  [ "$actual_package" = "kz.onay.free" ] || {
-    echo "REFUSING to install $actual_package: expected independent package kz.onay.free" >&2
-    exit 1
-  }
+  case "$actual_package" in
+    kz.onay.free) ;;
+    kz.onay)
+      echo "NOTE: $APK has the package kz.onay. It cannot be installed while the official ONAY! is installed"
+      echo "      (other signature): uninstall the official app yourself first. Prefer kz.onay.free."
+      ;;
+    *)
+      echo "REFUSING to install $actual_package: expected kz.onay.free (or kz.onay)" >&2
+      exit 1
+      ;;
+  esac
   adb install -r "$APK"
 fi

@@ -10,6 +10,8 @@
 #   ONAY_KS_PASS   keystore and key password
 #   ONAY_KS_ALIAS  key alias (default: test)
 # Optional: ORIG_DIR (default work/apks), OUT_DIR (default work/out)
+#   ONAY_VARIANT=map|full  map (default): bottom bar, QR button and payment hidden, the map only (kz.onay.free);
+#                          full: the original bottom bar and payment stay visible (kz.onay).
 #   ONAY_DEBUG_ACTIVITY=1  also adds the exported debug activity (adb entry point with test data and
 #                          location override); the default release build has no such entry point.
 # Needs a dex produced by scripts/build_dex.sh (work/nearby-dex/classes.dex).
@@ -43,7 +45,11 @@ apktool -JXmx10g d -f -o "$WORK/decoded" "$ORIG_DIR/base.apk" >"$WORK/decode.log
 echo "[2/6] patch smali, ads, layout, app icon and manifest"
 python3 -I "$ROOT/scripts/patch_smali.py" "$WORK/decoded"
 python3 -I "$ROOT/scripts/patch_ads.py" "$WORK/decoded"
-python3 -I "$ROOT/scripts/patch_layout.py" "$WORK/decoded"
+case "${ONAY_VARIANT:-map}" in
+  map) python3 -I "$ROOT/scripts/patch_layout.py" "$WORK/decoded" ;;                      # kz.onay.free: map only
+  full) python3 -I "$ROOT/scripts/patch_layout.py" "$WORK/decoded" --keep-navigation ;;  # kz.onay: bottom bar and payment stay
+  *) echo "ONAY_VARIANT must be map or full, got: ${ONAY_VARIANT}" >&2; exit 1 ;;
+esac
 python3 -I "$ROOT/scripts/patch_app_icon.py" "$WORK/decoded"
 # AppDataSource reads this generated Dagger field by name: fail the build, not the screen on the device.
 grep -rq -- "^\.field .*provideInterceptorProvider:" "$WORK"/decoded/smali*/kz/onay/di/ \
