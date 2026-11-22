@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           APK=work/input/onay-free-0.0.8.apk bash scripts/prepare_classpath.sh
-          bash scripts/build_dex.sh
+          ANDROID_JAR="$ANDROID_HOME/platforms/android-36/android.jar" bash scripts/build_dex.sh
 
       - name: Inject new DEX without changing native libraries or resources
         run: |
