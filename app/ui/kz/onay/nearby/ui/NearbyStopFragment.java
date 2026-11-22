@@ -69,6 +69,7 @@ import kz.onay.nearby.logic.MarkerStacking;
 import kz.onay.nearby.logic.NearbyCandidates;
 import kz.onay.nearby.logic.NearestStopFinder;
 import kz.onay.nearby.logic.RouteAtStop;
+import kz.onay.nearby.logic.RouteCorridors;
 import kz.onay.nearby.logic.RouteHighlightState;
 import kz.onay.nearby.logic.RouteInfo;
 import kz.onay.nearby.logic.RouteLine;
@@ -115,6 +116,8 @@ public class NearbyStopFragment extends Fragment {
     private static final long BUTTON_LOCATION_TIMEOUT_MS = 8_000L;
     private static final long LOCATION_POLL_MS = 400L;
     private static final long MAX_FIX_AGE_MS = 120_000L;
+    private static final int SHARED_CORRIDOR_COLOR = 0xFF7C3AED;
+    private static final int ROUTE_LINE_DP = 4;
     private static final int[] PALETTE = {
         0xFF1565C0, 0xFFC62828, 0xFF2E7D32, 0xFFEF6C00, 0xFF6A1B9A, 0xFF00838F, 0xFFAD1457, 0xFF4E342E,
         0xFF283593, 0xFF827717, 0xFFD84315, 0xFF00695C
@@ -123,6 +126,7 @@ public class NearbyStopFragment extends Fragment {
     private final RouteHighlightState highlight = new RouteHighlightState();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Map<Long, List<Polyline>> polylines = new HashMap<>();
+    private final List<Polyline> overviewPolylines = new ArrayList<>();
     private final Map<Long, List<Marker>> arrows = new HashMap<>();
     private final Map<Long, TextView> chips = new HashMap<>();
     private final Map<Long, Integer> colorIndex = new HashMap<>();
@@ -980,17 +984,9 @@ public class NearbyStopFragment extends Fragment {
         return typeId == RouteInfo.TYPE_TROLLEYBUS ? "троллейбус" : "автобус";
     }
 
-    /**
-     * Routes often share a street. Lines get different widths (the first route is the widest and lies at the
-     * bottom), so the colours of all routes stay visible side by side instead of the top one hiding the rest.
-     */
-    private int lineWidthOf(long routeId) {
-        Integer idx = colorIndex.get(routeId);
-        int n = Math.max(1, routes.size());
-        if (highlight.hasSelection()) {
-            return dp(4); // a selected route keeps the standard width; the others are only dimmed
-        }
-        return dp(4) + ((n - 1) - (idx == null ? 0 : idx)) * dp(3);
+    /** Consistent map width; never scale with the number of routes at a stop. */
+    private int routeLineWidth() {
+        return dp(ROUTE_LINE_DP);
     }
 
     private float lineZOf(long routeId) {
@@ -1006,6 +1002,12 @@ public class NearbyStopFragment extends Fragment {
 
     /** Applies the selection to chips, direction text, map lines and the camera. Does not rebuild geometry. */
     private void refreshHighlight(boolean moveCamera) {
+        boolean selected = highlight.hasSelection();
+        // The overview contains deduplicated purple corridors. Full original route paths
+        // are displayed only during selection, so the selected route stays continuous.
+        for (Polyline p : overviewPolylines) {
+            p.setVisible(!selected);
+        }
         for (RouteAtStop r : routes) {
             long id = r.getRouteId();
             boolean sel = highlight.isSelected(id);
@@ -1018,7 +1020,8 @@ public class NearbyStopFragment extends Fragment {
             if (pl != null) {
                 for (Polyline p : pl) {
                     p.setColor(withAlpha(colorOf(id), alpha));
-                    p.setWidth(lineWidthOf(id));
+                    p.setWidth(routeLineWidth());
+                    p.setVisible(selected);
                     p.setZIndex(sel ? 3f : lineZOf(id));
                 }
             }
@@ -1133,6 +1136,7 @@ public class NearbyStopFragment extends Fragment {
         map.setOnCameraIdleListener(null);
         map.clear();
         polylines.clear();
+        overviewPolylines.clear();
         arrows.clear();
         shownLines.clear();
         pickMarkers.clear();
@@ -1141,6 +1145,7 @@ public class NearbyStopFragment extends Fragment {
         map.addMarker(new MarkerOptions().position(new LatLng(selectedStop.getLat(), selectedStop.getLng()))
                 .title(data.getStopName(selectedStop.getId())).zIndex(6f));
         Map<Integer, BitmapDescriptor> arrowIcons = new HashMap<>();
+        List<RouteLine> visibleGeometry = new ArrayList<>();
         for (RouteAtStop r : routes) {
             long id = r.getRouteId();
             int color = colorOf(id);
@@ -1152,8 +1157,9 @@ public class NearbyStopFragment extends Fragment {
                 if (!servesStop || !line.isDrawable()) {
                     continue;
                 }
-                PolylineOptions po = new PolylineOptions().color(color).width(lineWidthOf(id)).geodesic(false)
-                        .zIndex(lineZOf(id));
+                // Full paths are used only when a route is selected.
+                PolylineOptions po = new PolylineOptions().color(color).width(routeLineWidth()).geodesic(false)
+                        .zIndex(lineZOf(id)).visible(highlight.hasSelection());
                 for (int i = 0; i < line.size(); i++) {
                     po.add(new LatLng(line.getLat(i), line.getLng(i)));
                 }
@@ -1169,10 +1175,23 @@ public class NearbyStopFragment extends Fragment {
                         .icon(icon).anchor(0.5f, 0.5f).flat(true)
                         .rotation((float) line.finalBearing())));
                 used.add(line);
+                visibleGeometry.add(line);
             }
             polylines.put(id, pl);
             arrows.put(id, ms);
             shownLines.put(id, used);
+        }
+
+        // Detect shared geometry, not just intersecting streets. Overview draws one
+        // purple path per corridor, while selecting a route restores its full geometry.
+        for (RouteCorridors.Part part : RouteCorridors.overview(visibleGeometry)) {
+            int colour = part.isShared() ? SHARED_CORRIDOR_COLOR : colorOf(part.getRouteId());
+            PolylineOptions po = new PolylineOptions().color(colour).width(routeLineWidth()).geodesic(false)
+                    .zIndex(part.isShared() ? 2f : 1f).visible(!highlight.hasSelection());
+            for (int i = 0; i < part.size(); i++) {
+                po.add(new LatLng(part.getLat(i), part.getLng(i)));
+            }
+            overviewPolylines.add(map.addPolyline(po));
         }
         renderVehicles(shownVehicles);
         fitCamera(null);
