@@ -193,7 +193,7 @@ class PatchScript(unittest.TestCase):
             self.assertEqual(f.read(), b"ONAY-ORIGINAL")
 
     def test_unexpected_adaptive_format_stops(self):
-        make_decoded(self.dir, adaptive=ORIGINAL_ADAPTIVE.replace("<monochrome", "<inset").replace("/>\n</adaptive", "/>\n</adaptive"))
+        make_decoded(self.dir, adaptive=ORIGINAL_ADAPTIVE.replace("<monochrome", "<inset"))
         with self.assertRaises(SystemExit):
             self.module.patch(self.dir)
 
@@ -205,11 +205,11 @@ class PatchScript(unittest.TestCase):
 
 
 def apk_under_test():
-    path = os.environ.get("ICON_TEST_APK") or os.path.join(ROOT, "work", "release", "onay-free.apk")
-    return path if os.path.isfile(path) else None
+    path = os.environ.get("ICON_TEST_APK")   # explicit only: a stale APK left in work/ would fail for the wrong reason
+    return path if path and os.path.isfile(path) else None
 
 
-@unittest.skipUnless(apk_under_test(), "no built APK (set ICON_TEST_APK or build work/release/onay-free.apk)")
+@unittest.skipUnless(apk_under_test(), "set ICON_TEST_APK=<built apk> to check the build result")
 class BuiltApk(unittest.TestCase):
     """Run after scripts/build_apk.sh; checks what the installer will see."""
 
