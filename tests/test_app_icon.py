@@ -237,7 +237,8 @@ class BuiltApk(unittest.TestCase):
 
     def test_aapt2_reports_the_launcher_icon_and_package(self):
         badging = subprocess.run(["aapt2", "dump", "badging", self.apk], capture_output=True, text=True, check=True).stdout
-        self.assertRegex(badging, r"^package: name='kz\.onay\.free'")
+        package = os.environ.get("ICON_TEST_PACKAGE", "kz.onay.free")   # the kz.onay variant: ICON_TEST_PACKAGE=kz.onay
+        self.assertRegex(badging, r"^package: name='%s'" % re.escape(package))
         self.assertRegex(badging, r"application: label='[^']*' icon='res/mipmap-anydpi-v26/ic_launcher_autumn\.xml'")
         self.assertNotRegex(badging, r"application-icon[^\n]*ic_launcher_(summer|spring|new|debug)")
 
