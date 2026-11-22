@@ -2,7 +2,7 @@ name: Build ONAY Free corridor QA APK
 
 on:
   push:
-    branches: [feature/shared-route-corridors]
+    branches: [feature/shared-route-corridors, master]
     paths:
       - ".github/workflows/build-corridor-qa.yml"
   workflow_dispatch:
@@ -54,9 +54,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p work/input
-          gh release download v0.0.8 --pattern 'onay-free-0.0.8.apk' --dir work/input
+          gh release download v0.0.8 --pattern 'onay-free-0.0.8*.apk' --dir work/input
           test -s work/input/onay-free-0.0.8.apk
+          test -s work/input/onay-free-0.0.8-kz.onay.apk
           unzip -tqq work/input/onay-free-0.0.8.apk
+          unzip -tqq work/input/onay-free-0.0.8-kz.onay.apk
 
       - name: Compile PR branch source code into a new extension DEX
         run: |
@@ -73,6 +75,11 @@ jobs:
             work/build/corridors-unsigned.apk
           zipalign -f -p 4 work/build/corridors-unsigned.apk work/build/corridors-aligned.apk
           zipalign -c -p 4 work/build/corridors-aligned.apk
+          python3 -I scripts/replace_nearby_dex.py \
+            work/input/onay-free-0.0.8-kz.onay.apk work/nearby-dex/classes.dex \
+            work/build/full-unsigned.apk
+          zipalign -f -p 4 work/build/full-unsigned.apk work/build/full-aligned.apk
+          zipalign -c -p 4 work/build/full-aligned.apk
 
       - name: Sign using the existing ONAY Free release key
         env:
@@ -90,26 +97,37 @@ jobs:
           apksigner sign --ks "$RUNNER_TEMP/signing.jks" \
             --ks-pass env:ONAY_KS_PASS --key-pass env:ONAY_KS_PASS \
             --ks-key-alias "${ONAY_KS_ALIAS:-test}" \
-            --out work/release/onay-free-pr19-purple-corridors.apk \
+            --out work/release/onay-free-0.0.9.apk \
             work/build/corridors-aligned.apk
+          apksigner sign --ks "$RUNNER_TEMP/signing.jks" \
+            --ks-pass env:ONAY_KS_PASS --key-pass env:ONAY_KS_PASS \
+            --ks-key-alias "${ONAY_KS_ALIAS:-test}" \
+            --out work/release/onay-free-0.0.9-kz.onay.apk \
+            work/build/full-aligned.apk
 
       - name: Verify signature matches v0.0.8 and APK is installable
         run: |
           set -euo pipefail
-          apk=work/release/onay-free-pr19-purple-corridors.apk
+          apk=work/release/onay-free-0.0.9.apk
           source=work/input/onay-free-0.0.8.apk
           source_cert="$(apksigner verify --print-certs "$source" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
           test -n "$source_cert"
           EXPECTED_PACKAGE=kz.onay.free bash scripts/verify_universal_apk.sh "$apk" "$source_cert"
           ICON_TEST_APK="$apk" python3 -I -m unittest discover -s tests -p 'test_app_icon.py' -v
+          source_full=work/input/onay-free-0.0.8-kz.onay.apk
+          full=work/release/onay-free-0.0.9-kz.onay.apk
+          full_cert="$(apksigner verify --print-certs "$source_full" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+          test -n "$full_cert"
+          EXPECTED_PACKAGE=kz.onay bash scripts/verify_universal_apk.sh "$full" "$full_cert"
+          ICON_TEST_APK="$full" ICON_TEST_PACKAGE=kz.onay python3 -I -m unittest discover -s tests -p 'test_app_icon.py' -v
           echo "SHA256=$(sha256sum "$apk" | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
           echo "PR #19 corridor QA APK: signed with the same certificate as v0.0.8; device test not yet performed." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload directly installable QA APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: onay-free-pr19-purple-corridors
-          path: work/release/onay-free-pr19-purple-corridors.apk
+          name: onay-free-v0.0.9-apks
+          path: work/release/onay-free-0.0.9*.apk
           retention-days: 7
           if-no-files-found: error
 
