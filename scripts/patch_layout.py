@@ -50,8 +50,12 @@ def hide(path: str, view_id: str) -> None:
         f.write(text.replace(tag, new_tag, 1))
 
 
-def main(decoded_dir: str) -> None:
+def main(decoded_dir: str, keep_navigation: bool = False) -> None:
+    """keep_navigation=True (the kz.onay variant): the bottom bar, QR button and shadows stay visible, so the
+    original tabs and payment remain reachable; only the promotional banners are hidden."""
     for name, view_id in TARGETS:
+        if keep_navigation and name == "activity_main.xml":
+            continue
         files = [p for p in sorted(glob.glob(os.path.join(decoded_dir, "res", "layout*", name)))
                  if 'android:id="@id/%s"' % view_id in open(p, encoding="utf-8").read()]
         if not files:
@@ -62,6 +66,7 @@ def main(decoded_dir: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        sys.exit("usage: patch_layout.py <decoded dir>")
-    main(sys.argv[1])
+    args = [a for a in sys.argv[1:] if a != "--keep-navigation"]
+    if len(args) != 1 or len(sys.argv) - 1 - len(args) > 1:
+        sys.exit("usage: patch_layout.py <decoded dir> [--keep-navigation]")
+    main(args[0], keep_navigation="--keep-navigation" in sys.argv[1:])

@@ -38,6 +38,18 @@ class NoMenuButton(unittest.TestCase):
         self.assertLess(tail.index("originalNavigationShown = false;"), tail.index("applyOriginalNavigation();"))
 
 
+class VariantNavigation(unittest.TestCase):
+    """kz.onay keeps the bottom bar and payment; kz.onay.free is the map only."""
+
+    def test_the_kz_onay_package_always_shows_the_bar(self):
+        text = source()
+        self.assertIn("boolean shown = originalNavigationShown || keepsOriginalNavigation(c);", text)
+        self.assertIn('return RESOURCE_PACKAGE.equals(c.getPackageName());', text)
+        apply = body(text, "private void applyOriginalNavigation()")
+        self.assertIn("v.setVisibility(shown ? View.VISIBLE : View.GONE);", apply)
+        self.assertIn("rootView.setPadding(0, 0, 0, shown ? dp(44) : 0);", apply)
+
+
 class NavigationLookup(unittest.TestCase):
     """The resource table keeps the package "kz.onay" while the application id is "kz.onay.free"."""
 
