@@ -84,7 +84,7 @@ import kz.onay.ui.routes2.shared.MyLocationRequestHelper;
 /**
  * "Рядом": the nearest stop, big route buttons and the routes of that stop on the map.
  * The view is built in code so that no resource ids have to be added to the app.
- * Route lines are added once per stop; selecting a route only changes colour, width and z-order.
+ * Overview uses shared corridors; selecting a route switches to its original full geometry.
  * Database reads and stop searches run on a background thread; everything touching views runs on the main one.
  */
 public class NearbyStopFragment extends Fragment {
@@ -1593,6 +1593,7 @@ public class NearbyStopFragment extends Fragment {
     private void forgetMapObjects() {
         userMarker = null;
         polylines.clear();
+        overviewPolylines.clear();
         arrows.clear();
         shownLines.clear();
         vehicleMarkers.clear();
@@ -1965,6 +1966,7 @@ public class NearbyStopFragment extends Fragment {
         topCardView = null;
         dockView = null;
         polylines.clear();
+        overviewPolylines.clear();
         arrows.clear();
         chips.clear();
         pickMarkers.clear();
