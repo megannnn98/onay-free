@@ -134,3 +134,73 @@ jobs:
       - name: Delete signing key from runner
         if: always()
         run: rm -f "$RUNNER_TEMP/signing.jks"
+
+  publish:
+    name: Publish GitHub prerelease v0.0.9
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download verified APKs from this workflow run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          gh run download "$GITHUB_RUN_ID" --name onay-free-v0.0.9-apks --dir release
+          test -s release/onay-free-0.0.9.apk
+          test -s release/onay-free-0.0.9-kz.onay.apk
+          sha256sum release/*.apk
+
+      - name: Publish both APKs under v0.0.9
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.0.9 >/dev/null 2>&1; then
+            echo "::error::v0.0.9 release already exists; refusing overwrite"
+            exit 1
+          fi
+          cat > release/notes.md <<'EOF'
+          ## ONAY Free 0.0.9 — общие коридоры маршрутов
+
+          - Общие участки разных маршрутов отображаются одной фиолетовой линией #7C3AED.
+          - Толщина линий фиксирована: 4 dp, независимо от количества маршрутов.
+          - Перекрёстки и близкие отдельные дороги не объединяются.
+          - После разветвления маршруты снова приобретают свои цвета.
+          - При выборе номера отображается исходная полная геометрия маршрута.
+
+          ### APK для Android ARM64
+
+          - **onay-free-0.0.9.apk** — отдельное приложение kz.onay.free, устанавливается рядом с официальным ONAY!.
+          - **onay-free-0.0.9-kz.onay.apk** — версия kz.onay с нижней панелью и оплатой, несовместима с одновременной установкой официального ONAY!.
+
+          Для каждого пакета сохранён сертификат его версии v0.0.8.
+
+          **Предварительный релиз:** сборка, подпись, проверка содержимого и автоматические тесты пройдены; отображение новых линий на реальном устройстве ещё не проверено.
+          EOF
+          printf '\n### Контрольные суммы SHA-256\n\n' >> release/notes.md
+          sha256sum release/*.apk >> release/notes.md
+          gh release create v0.0.9 \
+            release/onay-free-0.0.9.apk \
+            release/onay-free-0.0.9-kz.onay.apk \
+            --target "$GITHUB_SHA" \
+            --title "ONAY Free v0.0.9 — Shared route corridors" \
+            --prerelease \
+            --notes-file release/notes.md
+
+      - name: Confirm release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release view v0.0.9 --json tagName,isPrerelease,assets,url
+          for name in onay-free-0.0.9.apk onay-free-0.0.9-kz.onay.apk; do
+            gh release view v0.0.9 --json assets --jq '.assets[].name' | grep -Fx "$name"
+          done
