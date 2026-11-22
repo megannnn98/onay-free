@@ -36,6 +36,31 @@ elif name == 'apksigner':
         shutil.copyfile(args[-1], args[args.index('--out') + 1])
     elif args[0] != 'verify':
         sys.exit(2)
+elif name == 'apktool':
+    if args[1] == 'd':
+        dest = pathlib.Path(args[args.index('-o') + 1])
+        dest.mkdir()
+        shutil.copyfile(args[-1], dest / 'merged.apk')
+        (dest / 'AndroidManifest.xml').write_text(
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android"'
+            ' package="kz.onay"><application android:name=".OnayApp" />'
+            '</manifest>', encoding='utf-8')
+    elif args[1] == 'b':
+        out = pathlib.Path(args[args.index('-o') + 1])
+        origin = pathlib.Path(args[-1])
+        with zipfile.ZipFile(origin / 'merged.apk') as old, zipfile.ZipFile(out, 'w') as z:
+            for entry in old.namelist():
+                data = old.read(entry)
+                if entry == 'AndroidManifest.xml':
+                    # Offline placeholder for a binary AXML produced by real apktool.
+                    data = bytes([3, 0, 8, 0]) + (origin / entry).read_bytes()
+                if entry == 'classes.dex' and os.environ.get('MOCK_CLONE_CORRUPT'):
+                    data = b'broken dex'
+                z.writestr(entry, data)
+elif name == 'aapt2':
+    if args[:2] == ['dump', 'badging']:
+        print("package: name='%s' versionCode='23310'" %
+              ('kz.onay' if os.environ.get('MOCK_WRONG_PACKAGE') else 'kz.onay.free'))
 '''
 
 
@@ -51,7 +76,7 @@ class UniversalApkTest(unittest.TestCase):
         (self.split_dir / 'split_config.xxhdpi.apk').write_bytes(b'density')
         self.tools = self.path / 'bin'
         self.tools.mkdir()
-        for tool in ('java', 'zipalign', 'apksigner'):
+        for tool in ('java', 'zipalign', 'apksigner', 'apktool', 'aapt2'):
             file = self.tools / tool
             file.write_text(TOOL)
             file.chmod(0o755)
@@ -68,7 +93,8 @@ class UniversalApkTest(unittest.TestCase):
                     'APKEDITOR_JAR': str(self.jar),
                     'ONAY_KS': str(self.key),
                     'ONAY_KS_PASS': 'fake_password',
-                    'MOCK_LOG': str(self.log)}
+                    'MOCK_LOG': str(self.log),
+                    'ONAY_PACKAGE_NAME': 'kz.onay'}
 
     def run_build(self, **environment):
         return subprocess.run(['bash', str(SCRIPT)],
@@ -95,6 +121,45 @@ class UniversalApkTest(unittest.TestCase):
         result = self.run_build(SPLITS_INPUT=str(archive))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.output.is_file())
+
+    def test_independent_package_keeps_existing_dex_and_native_payload(self):
+        result = self.run_build(ONAY_PACKAGE_NAME='kz.onay.free')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(self.output) as apk:
+            manifest = apk.read('AndroidManifest.xml').decode()
+            self.assertIn('package="kz.onay.free"', manifest)
+            self.assertIn('kz.onay.OnayApp', manifest)
+        calls = self.log.read_text()
+        self.assertIn('apktool -JXmx6g d ', calls)
+        self.assertIn('apktool -JXmx6g b ', calls)
+        self.assertIn('aapt2 dump badging ', calls)
+
+    def test_apktool_dex_mutation_is_not_shipped(self):
+        # Manifest-only transplant intentionally discards *everything* except
+        # apktool's compiled manifest, even if apktool rewrote classes.dex.
+        result = self.run_build(ONAY_PACKAGE_NAME='kz.onay.free', MOCK_CLONE_CORRUPT='1')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(self.output) as apk:
+            self.assertEqual(apk.read('classes.dex'), b'fake')
+
+    def test_clone_rejects_unexpected_installed_package(self):
+        result = self.run_build(ONAY_PACKAGE_NAME='kz.onay.free', MOCK_WRONG_PACKAGE='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('clone built as kz.onay', result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_repackages_existing_latest_single_apk(self):
+        source = self.path / 'onay-free-0.0.4.apk'
+        with zipfile.ZipFile(source, 'w') as z:
+            for name in ('AndroidManifest.xml', 'classes.dex', 'resources.arsc',
+                         'lib/arm64-v8a/libfake.so'):
+                z.writestr(name, b'original bytes')
+        result = self.run_build(SPLITS_INPUT=str(source), ONAY_PACKAGE_NAME='kz.onay.free')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(self.output) as apk:
+            self.assertIn('package="kz.onay.free"', apk.read('AndroidManifest.xml').decode())
+            self.assertEqual(apk.read('classes.dex'), b'original bytes')
+        self.assertNotIn('java -Xmx6g', self.log.read_text())
 
     def test_missing_base_fails_without_output(self):
         (self.split_dir / 'base.apk').unlink()

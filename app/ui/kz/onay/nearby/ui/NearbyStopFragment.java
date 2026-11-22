@@ -483,11 +483,17 @@ public class NearbyStopFragment extends Fragment {
         data = src;
         allStops = stops;
         if (stops.isEmpty()) {
-            showStatus("Остановки ещё не загружены. Открываем карту транспорта (Routes): после загрузки вернитесь на «Рядом».",
-                    "Повторить", this::start);
+            // A clean installation has an empty Room database. Do not show the
+            // world-scale Google map or an empty route dock as a working screen.
+            mapView.setVisibility(View.INVISIBLE);
+            dockView.setVisibility(View.GONE);
+            showStatus("Остановки ещё не загружены. Откройте транспорт (Routes), дождитесь загрузки города и вернитесь сюда.",
+                    "Открыть транспорт", this::openRoutesTabAgain, "Повторить", this::start);
             openRoutesTabOnce();
             return;
         }
+        mapView.setVisibility(View.VISIBLE);
+        dockView.setVisibility(View.VISIBLE);
         locate();
     }
 
@@ -1743,7 +1749,8 @@ public class NearbyStopFragment extends Fragment {
             return; // not laid out yet
         }
         int top = topCardView.getBottom();
-        int bottom = Math.min(rootView.getHeight() - dockView.getTop(), rootView.getHeight() / 2);
+        int bottom = dockView.getVisibility() == View.GONE ? 0
+                : Math.min(rootView.getHeight() - dockView.getTop(), rootView.getHeight() / 2);
         if (map != null && top >= 0 && bottom >= 0 && (top != mapPadTop || bottom != mapPadBottom)) {
             mapPadTop = top;
             mapPadBottom = bottom;
@@ -1790,30 +1797,41 @@ public class NearbyStopFragment extends Fragment {
     }
 
     /**
-     * The app fills its stop database when the original transport map is opened. On the very first start the
-     * database is empty, so this opens that map once per process (clicking the app's own Routes tab). The tab bar is
-     * shown for the trip and hidden again when this screen comes back.
+     * The stock Routes screen initializes the Room stop database on a clean install.
+     * Switch tabs via MainActivity's tab-selection method, not performClick() on a
+     * hidden nav child: the child may not own a click listener.
+     *
+     * This is specific to the reverse-engineered ONAY! 3.6.5 MainActivity.x1(0).
+     * Never loop automatically: the user may still need to select a city or sign in.
      */
     private void openRoutesTabOnce() {
-        if (routesTabOpenedForStops || testMode || rootView == null) {
-            return;
-        }
-        Context c = requireContext();
-        int id = c.getResources().getIdentifier("nav_routes", "id", c.getPackageName());
-        View tab = id == 0 ? null : requireActivity().findViewById(id);
-        if (tab == null) {
+        if (routesTabOpenedForStops || testMode || rootView == null || !isAdded()) {
             return;
         }
         routesTabOpenedForStops = true;
-        recheckOnResume = true; // when the user returns, look for stops again
-        for (String name : ORIGINAL_NAVIGATION_IDS) {
-            int viewId = c.getResources().getIdentifier(name, "id", c.getPackageName());
-            View v = viewId == 0 ? null : requireActivity().findViewById(viewId);
-            if (v != null) {
-                v.setVisibility(View.VISIBLE);
-            }
+        recheckOnResume = true;
+        // Keep the original navigation visible while the user completes first-run setup.
+        originalNavigationShown = true;
+        applyOriginalNavigation();
+        try {
+            java.lang.reflect.Method selectTab = requireActivity().getClass().getMethod("x1", int.class);
+            selectTab.invoke(requireActivity(), 0); // 0 = stock Routes screen
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            routesTabOpenedForStops = false;
+            recheckOnResume = false;
+            Log.e(TAG, "cannot open stock Routes screen for first-run sync", e);
+            showStatus("Не удалось автоматически открыть транспорт. Проверьте выбранный город и подключение к сети.",
+                    "Показать вкладки", () -> {
+                        originalNavigationShown = true;
+                        applyOriginalNavigation();
+                    }, "Повторить", this::start);
         }
-        tab.performClick();
+    }
+
+    /** Deliberate retry is allowed even after the one automatic bootstrap attempt. */
+    private void openRoutesTabAgain() {
+        routesTabOpenedForStops = false;
+        openRoutesTabOnce();
     }
 
     private void toggleExpandedChips() {

@@ -2,7 +2,7 @@
 # Static verification of a single (universal) ONAY! APK. Used by CI and by hand before a release.
 #
 # Usage: scripts/verify_universal_apk.sh <apk> [expected_cert_sha256]
-#   EXPECTED_PACKAGE   package name the APK must have (default kz.onay)
+#   EXPECTED_PACKAGE   package name the APK must have (default kz.onay.free)
 #
 # It does NOT replace an install and launch test on a real device; it checks that the merge did not leave
 # the APK depending on split APKs and that it satisfies the rules the Android installer enforces for
@@ -11,7 +11,7 @@ set -euo pipefail
 
 APK="${1:?usage: verify_universal_apk.sh <apk> [expected_cert_sha256]}"
 EXPECTED_CERT="${2:-}"
-EXPECTED_PACKAGE="${EXPECTED_PACKAGE:-kz.onay}"
+EXPECTED_PACKAGE="${EXPECTED_PACKAGE:-kz.onay.free}"
 
 for tool in unzip aapt2 apksigner zipalign; do
   command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 1; }
