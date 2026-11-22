@@ -266,12 +266,6 @@ public class NearbyStopFragment extends Fragment {
         titleView = text(c, 20, true, 0xFF212121);
         titleView.setMaxLines(2);
         titleRow.addView(titleView, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView moreButton = text(c, 22, true, 0xFF616161);
-        moreButton.setText("⋯");
-        moreButton.setGravity(Gravity.CENTER);
-        moreButton.setContentDescription("Остальное: вкладки ONAY!, карты, оплата");
-        moreButton.setOnClickListener(v -> toggleOriginalNavigation());
-        titleRow.addView(moreButton, new LinearLayout.LayoutParams(dp(44), dp(40)));
         topCard.addView(titleRow);
         subtitleView = text(c, 14, false, 0xFF616161);
         topCard.addView(subtitleView);
@@ -494,6 +488,8 @@ public class NearbyStopFragment extends Fragment {
         }
         mapView.setVisibility(View.VISIBLE);
         dockView.setVisibility(View.VISIBLE);
+        originalNavigationShown = false;   // first-run setup is done: back to the bare stop-first screen
+        applyOriginalNavigation();
         locate();
     }
 
@@ -1771,14 +1767,11 @@ public class NearbyStopFragment extends Fragment {
     };
 
     /**
-     * The original ONAY! tabs, QR button and payment stay in the app but are hidden by the layout patch.
-     * This button shows or hides them again (found by id name, so this code does not depend on the app's R class).
+     * The original ONAY! tabs, QR button and payment are hidden by the layout patch and there is no button to
+     * show them. They appear only while a clean installation needs the stock Routes screen (openRoutesTabOnce,
+     * the error fallback) and hide again once the stops are loaded. Views are found by id name, so this code
+     * does not depend on the app's R class.
      */
-    private void toggleOriginalNavigation() {
-        originalNavigationShown = !originalNavigationShown;
-        applyOriginalNavigation();
-    }
-
     /** Called also on every resume: the host activity may restore its bar (for example after being recreated). */
     private void applyOriginalNavigation() {
         if (rootView == null) {
