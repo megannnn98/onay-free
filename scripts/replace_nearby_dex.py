@@ -11,6 +11,7 @@ from pathlib import Path
 
 NEARBY_CLASS = b"Lkz/onay/nearby/ui/NearbyStopFragment;"
 NEW_CORRIDOR_CLASS = b"Lkz/onay/nearby/logic/RouteCorridors;"
+EXTENSION_LOGIC_CLASS = b"Lkz/onay/nearby/logic/RouteLine;"
 
 
 def replace(source: Path, compiled_dex: Path, output: Path) -> str:
@@ -26,7 +27,8 @@ def replace(source: Path, compiled_dex: Path, output: Path) -> str:
         dex_names = [n for n in zin.namelist() if re.fullmatch(r"classes(?:\d+)?\.dex", n)]
         if not dex_names:
             raise ValueError("source APK has no DEX files")
-        extension = [n for n in dex_names if NEARBY_CLASS in zin.read(n)]
+        extension = [n for n in dex_names if NEARBY_CLASS in zin.read(n)
+                     and EXTENSION_LOGIC_CLASS in zin.read(n)]
         if len(extension) != 1:
             raise ValueError(f"expected exactly one Nearby extension DEX, found {extension}")
         target = extension[0]
