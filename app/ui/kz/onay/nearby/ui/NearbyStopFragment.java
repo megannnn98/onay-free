@@ -1769,24 +1769,40 @@ public class NearbyStopFragment extends Fragment {
     /**
      * The original ONAY! tabs, QR button and payment are hidden by the layout patch and there is no button to
      * show them. They appear only while a clean installation needs the stock Routes screen (openRoutesTabOnce,
-     * the error fallback) and hide again once the stops are loaded. Views are found by id name, so this code
-     * does not depend on the app's R class.
+     * the error fallback) and hide again once the stops are loaded. Called also on every resume: the host
+     * activity may restore its bar (for example after being recreated).
+     *
+     * Views are found by id name. The resource table keeps the package name of ONAY! ("kz.onay") although the
+     * application id is "kz.onay.free": looking the ids up in getPackageName() finds nothing, the bar then never
+     * appears and the user is stuck on the stock Routes screen after the first login.
      */
-    /** Called also on every resume: the host activity may restore its bar (for example after being recreated). */
     private void applyOriginalNavigation() {
         if (rootView == null) {
             return;
         }
         Context c = requireContext();
+        int found = 0;
         for (String name : ORIGINAL_NAVIGATION_IDS) {
-            int id = c.getResources().getIdentifier(name, "id", c.getPackageName());
+            int id = navigationId(c, name);
             View v = id == 0 ? null : requireActivity().findViewById(id);
             if (v != null) {
+                found++;
                 v.setVisibility(originalNavigationShown ? View.VISIBLE : View.GONE);
             }
         }
+        if (found == 0) {
+            Log.e(TAG, "none of the original navigation views was found (resource package changed?)");
+        }
         // The round QR button reaches above the container when the bar is shown.
         rootView.setPadding(0, 0, 0, originalNavigationShown ? dp(44) : 0);
+    }
+
+    /** Package name inside the resource table of ONAY! 3.6.5; the application id of this build differs from it. */
+    private static final String RESOURCE_PACKAGE = "kz.onay";
+
+    private static int navigationId(Context c, String name) {
+        int id = c.getResources().getIdentifier(name, "id", RESOURCE_PACKAGE);
+        return id != 0 ? id : c.getResources().getIdentifier(name, "id", c.getPackageName());
     }
 
     /**
