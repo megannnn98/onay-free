@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import kz.onay.nearby.logic.RouteDirectionInfo;
+import kz.onay.nearby.logic.StopNames;
 import kz.onay.nearby.logic.RouteInfo;
 import kz.onay.nearby.logic.RouteLine;
 import kz.onay.nearby.logic.StopPoint;
@@ -122,7 +123,7 @@ final class TestData implements NearbyDataSource {
                 return s.getName();
             }
         }
-        return "Остановка " + stopId;
+        return StopNames.placeholder(stopId);
     }
 
     @Override

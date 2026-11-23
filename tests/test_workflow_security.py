@@ -128,6 +128,24 @@ class AllWorkflowsPinned(unittest.TestCase):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml")))
 
+    def test_signing_jobs_do_not_install_pip_packages_or_add_venvs_to_path(self):
+        for path in self.workflows():
+            workflow = Path(path).read_text(encoding="utf-8")
+            jobs = re.split(r"(?m)^  [A-Za-z_][A-Za-z0-9_-]*:\s*$", workflow)
+            for job in jobs:
+                if re.search(r"secrets\.ONAY_", job):
+                    self.assertNotRegex(job, r"(?i)\bpip(?:3)?[\"']?\s+install\b", path)
+                    for line in job.splitlines():
+                        if "GITHUB_PATH" in line:
+                            self.assertNotRegex(line, r"(?i)venv|virtualenv", path)
+
+    def test_corridor_build_uses_pinned_upstream_enjarify(self):
+        workflow = (ROOT / '.github/workflows/build-corridor-qa.yml').read_text(encoding='utf-8')
+        self.assertIn('repository: google/enjarify', workflow)
+        self.assertIn('ref: c4fb7e047a457ab580a3c8577aa76fd53ce967b0', workflow)
+        self.assertNotIn('enjarify-adapter', workflow)
+        self.assertIn('ENJARIFY_MODULE_DIR="$GITHUB_WORKSPACE/work/enjarify"', workflow)
+
     def test_every_action_is_pinned_to_a_commit_sha(self):
         for path in self.workflows():
             with open(path, encoding="utf-8") as f:

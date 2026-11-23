@@ -151,7 +151,7 @@ final class AppDataSource implements NearbyDataSource {
     @Override
     public String getStopName(long stopId) {
         String n = names.get(stopId);
-        return n != null ? n : "Остановка " + stopId;
+        return n != null ? n : StopNames.placeholder(stopId);
     }
 
     @Override
@@ -246,7 +246,7 @@ final class AppDataSource implements NearbyDataSource {
             if (lastStopId >= 0) {
                 prefetchNames(Collections.singletonList(new StopPoint(lastStopId, null, null, null)));
                 String name = getStopName(lastStopId);
-                String label = name.equals("Остановка " + lastStopId) ? null : DirectionLabel.towards(name);
+                String label = name.equals(StopNames.placeholder(lastStopId)) ? null : DirectionLabel.towards(name);
                 if (label != null) {
                     directionLabels.put(routeId + "/" + index, label);
                 }

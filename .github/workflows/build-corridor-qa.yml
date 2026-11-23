@@ -11,24 +11,14 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build and sign PR #19 APK
+  compile:
+    name: Compile corridor DEX
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Confirm release signing secrets exist (never print them)
-        env:
-          KEYSTORE_B64: ${{ secrets.ONAY_KEYSTORE_B64 }}
-          ONAY_KS_PASS: ${{ secrets.ONAY_KS_PASS }}
-        run: |
-          test -n "$KEYSTORE_B64" && test -n "$ONAY_KS_PASS" || {
-            echo "::error::Missing ONAY Free release signing secrets"
-            exit 1
-          }
 
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
@@ -41,12 +31,13 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;35.0.1" >/dev/null
           echo "$ANDROID_HOME/build-tools/35.0.1" >> "$GITHUB_PATH"
 
-      - name: Install Enjarify for compile-only Android classpath
-        run: |
-          set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/enjarify-venv"
-          "$RUNNER_TEMP/enjarify-venv/bin/pip" install enjarify-adapter==1.0.0
-          echo "$RUNNER_TEMP/enjarify-venv/bin" >> "$GITHUB_PATH"
+      - name: Check out Enjarify for compile-only Android classpath
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: google/enjarify
+          ref: c4fb7e047a457ab580a3c8577aa76fd53ce967b0 # 1.0.3
+          path: work/enjarify
+          persist-credentials: false
 
       - name: Download previously signed release APK
         env:
@@ -63,8 +54,61 @@ jobs:
       - name: Compile PR branch source code into a new extension DEX
         run: |
           set -euo pipefail
-          APK=work/input/onay-free-0.0.8.apk bash scripts/prepare_classpath.sh
+          ENJARIFY_MODULE_DIR="$GITHUB_WORKSPACE/work/enjarify" APK=work/input/onay-free-0.0.8.apk bash scripts/prepare_classpath.sh
           ANDROID_JAR="$ANDROID_HOME/platforms/android-36/android.jar" bash scripts/build_dex.sh
+
+      - name: Upload compiled DEX
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: corridor-dex
+          path: work/nearby-dex/classes.dex
+          retention-days: 1
+          if-no-files-found: error
+
+  build:
+    name: Package and sign corridor QA APK
+    needs: compile
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK build tools
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;35.0.1" >/dev/null
+          echo "$ANDROID_HOME/build-tools/35.0.1" >> "$GITHUB_PATH"
+
+      - name: Download previously signed release APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/input
+          gh release download v0.0.8 --pattern 'onay-free-0.0.8*.apk' --dir work/input
+          test -s work/input/onay-free-0.0.8.apk
+          test -s work/input/onay-free-0.0.8-kz.onay.apk
+          unzip -tqq work/input/onay-free-0.0.8.apk
+          unzip -tqq work/input/onay-free-0.0.8-kz.onay.apk
+
+      - name: Download compiled DEX
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p work/nearby-dex
+          gh run download "$GITHUB_RUN_ID" --name corridor-dex --dir work/nearby-dex
+          test -s work/nearby-dex/classes.dex
 
       - name: Inject new DEX without changing native libraries or resources
         run: |

@@ -11,7 +11,11 @@ OUT="$ROOT/work/classpath"
 mkdir -p "$OUT"
 [ -f "$APK" ] || { echo "missing $APK" >&2; exit 1; }
 if [ ! -s "$OUT/app-classes.jar" ]; then
-  enjarify -f -o "$OUT/app-classes.jar" "$APK"
+  if [ -n "${ENJARIFY_MODULE_DIR:-}" ]; then
+    PYTHONPATH="$ENJARIFY_MODULE_DIR" python3 -O -m enjarify.main -f -o "$OUT/app-classes.jar" "$APK"
+  else
+    "${ENJARIFY:-enjarify}" -f -o "$OUT/app-classes.jar" "$APK"
+  fi
 fi
 python3 -I - "$OUT/app-classes.jar" "$OUT/app-classes-v52.jar" <<'PY'
 import sys, zipfile
