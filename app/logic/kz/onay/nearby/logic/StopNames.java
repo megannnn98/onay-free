@@ -10,6 +10,11 @@ public final class StopNames {
     /** With no usable name a placeholder with the stop id is returned. */
     public static String choose(Map<String, String> byLanguage, String preferredLanguage, long stopId) {
         String name = Translations.pick(byLanguage, preferredLanguage);
-        return name != null ? name : "Остановка " + stopId;
+        return name != null ? name : placeholder(stopId);
+    }
+
+    /** Returns a display name for a stop whose name is unavailable. */
+    public static String placeholder(long stopId) {
+        return "Остановка " + stopId;
     }
 }

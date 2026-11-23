@@ -7,8 +7,7 @@ space is left behind. Each start tag must be found exactly once per layout file,
   bottom_sheet_branded_stops.xml   yandexBannerView     Yandex banner in the branded stops sheet
   bottom_sheet_poi.xml             composeViewBanner    partner banner in the partner point sheet
   activity_main.xml                nav_* , QR, shadow   the bottom navigation bar and the round QR button: the app
-                                                        opens on the map. Nothing is removed: the "..." button of the
-                                                        new screen shows the bar again (payment stays reachable).
+                                                        opens on the map without the bottom bar.
 """
 import glob
 import os

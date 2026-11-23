@@ -37,4 +37,10 @@ public final class RouteAtStop {
     public boolean isDirectionKnown() {
         return !directionIndexes.isEmpty();
     }
+
+    /** True when this line is drawn for the stop: it has two points and its direction serves the stop (or is unknown). */
+    public boolean shows(RouteLine line) {
+        return line != null && line.isDrawable()
+                && (!isDirectionKnown() || directionIndexes.contains(line.getDirectionIndex()));
+    }
 }

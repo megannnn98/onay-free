@@ -20,6 +20,9 @@ class CorridorWiringTest(unittest.TestCase):
 
     def test_overview_is_geometry_based_and_separate_from_full_paths(self):
         self.assertIn("RouteCorridors.overview(visibleGeometry)", FRAGMENT)
+        draw = FRAGMENT[FRAGMENT.index("private void drawStop()"):FRAGMENT.index("private void addUserMarker()", FRAGMENT.index("private void drawStop()"))]
+        self.assertNotIn("RouteCorridors.overview(", draw)
+        self.assertIn("part : overviewParts", draw)
         self.assertIn("part.isShared() ? SHARED_CORRIDOR_COLOR : colorOf(part.getRouteId())", FRAGMENT)
         self.assertIn("overviewPolylines.add(map.addPolyline(po))", FRAGMENT)
         self.assertIn(".visible(highlight.hasSelection())", FRAGMENT)
@@ -33,6 +36,13 @@ class CorridorWiringTest(unittest.TestCase):
         self.assertIn("p.setVisible(selected)", body)
         self.assertIn("p.setWidth(routeLineWidth())", body)
         self.assertIn("p.setZIndex(sel ? 3f : lineZOf(id))", body)
+
+    def test_cancel_pick_reloads_when_no_routes_are_available(self):
+        begin = FRAGMENT.index("private void exitPickMode()")
+        end = FRAGMENT.index("private void forgetMapObjects()", begin)
+        body = FRAGMENT[begin:end]
+        self.assertIn("routesLoadSkipped || routes.isEmpty()", body)
+        self.assertIn("loadRoutes(selectedStop)", body)
 
     def test_map_reset_clears_both_layers(self):
         for name in ("private void drawStop()", "private void forgetMapObjects()"):

@@ -56,7 +56,7 @@ run_mutant cand-no-sort       NearbyCandidates.java      "int c = Double.compare
 run_mutant cand-no-max        NearbyCandidates.java      "&& out.size() < max"             ""
 run_mutant names-no-exact     Translations.java             "if (k.equalsIgnoreCase(preferredLanguage) && usable(byLanguage.get(k))) {" "if (false) {"
 run_mutant names-no-russian   Translations.java             'if (primary(k).equals("ru") && usable(byLanguage.get(k))) {' "if (false) {"
-run_mutant names-no-placeholder StopNames.java           'return name != null ? name : "Остановка " + stopId;' 'return name != null ? name : "";'
+run_mutant names-no-placeholder StopNames.java           'return name != null ? name : placeholder(stopId);' 'return name != null ? name : "";'
 run_mutant names-blank-ok     Translations.java             "return s != null && !s.trim().isEmpty();" "return s != null;"
 run_mutant route-placeholder  RouteNames.java           'return name != null ? name.trim() : "Маршрут " + routeId;' 'return name != null ? name.trim() : "Остановка " + routeId;'
 run_mutant route-no-trim      RouteNames.java            "name.trim() :"                   "name :"
@@ -91,5 +91,8 @@ run_mutant focus-no-radius    CameraFocus.java           "v.getLng()) <= vehicle
 run_mutant info-no-direction  VehicleInfoText.java       "directionLabel != null && !directionLabel.trim().isEmpty()" "false"
 run_mutant info-no-trim       VehicleInfoText.java       "sb.append(\" · \").append(directionLabel.trim());" "sb.append(\" · \").append(directionLabel);"
 run_mutant info-age-edge      VehicleInfoText.java       "reportAgeSec <= 0" "reportAgeSec < 0"
+run_mutant shows-no-drawable  RouteAtStop.java           "return line != null && line.isDrawable()" "return line != null"
+run_mutant shows-no-direction RouteAtStop.java           "&& (!isDirectionKnown() || directionIndexes.contains(line.getDirectionIndex()));" ";"
+run_mutant shows-unknown-none RouteAtStop.java           "(!isDirectionKnown() || " "(false || "
 echo "survivors: $survived"
 [ "$survived" -eq 0 ]

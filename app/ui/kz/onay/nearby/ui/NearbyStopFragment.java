@@ -136,6 +136,9 @@ public class NearbyStopFragment extends Fragment {
     private final Map<String, BitmapDescriptor> vehicleIcons = new HashMap<>();
 
     private ExecutorService executor;
+    private ExecutorService vehicleExecutor;
+    private ExecutorService pickExecutor;
+    private int vehicleRequestGeneration;
     private int generation;
     private boolean testMode;
     private String forcedState;
@@ -199,6 +202,7 @@ public class NearbyStopFragment extends Fragment {
     private double selectedDistance = -1;
     private List<StopMatch> candidates = Collections.emptyList();
     private List<RouteAtStop> routes = Collections.emptyList();
+    private List<RouteCorridors.Part> overviewParts = Collections.emptyList();
 
     /** A vehicle on the map together with what is needed to restyle it when the selection changes. */
     private static final class VehicleMarker {
@@ -231,6 +235,8 @@ public class NearbyStopFragment extends Fragment {
         testMode = "test".equals(args.getString(ARG_DATA));
         generation++;
         executor = Executors.newSingleThreadExecutor();
+        vehicleExecutor = Executors.newSingleThreadExecutor();
+        pickExecutor = Executors.newSingleThreadExecutor();
 
         FrameLayout root = new FrameLayout(c);
         rootView = root;
@@ -432,11 +438,9 @@ public class NearbyStopFragment extends Fragment {
     // ---------- loading: stops, then location, then the nearest stop ----------
 
     private void start() {
+        generation++;
         handler.removeCallbacksAndMessages(null);
-        // The line above just deleted the vehicle tick and the only callback that resets the
-        // in-flight flag: a request of the previous view must not block this one.
         stopVehiclePolling();
-        vehicleRequestInFlight = false;
         stopLocationWatch();
         final int gen = generation;
         locationNote = null;
@@ -581,6 +585,7 @@ public class NearbyStopFragment extends Fragment {
 
     /** Uses the app's own location helper; its state is read by polling, with a timeout. */
     private void startLocationWatch(final boolean forButton) {
+        stopLocationWatch();
         locationHelper = new MyLocationRequestHelper(requireActivity());
         getViewLifecycleOwner().getLifecycle().addObserver(locationHelper);
         locationDeadline = SystemClock.elapsedRealtime() + (forButton ? BUTTON_LOCATION_TIMEOUT_MS : LOCATION_TIMEOUT_MS);
@@ -588,10 +593,11 @@ public class NearbyStopFragment extends Fragment {
             showStatus("Определяем местоположение…", null, null);
         }
         final int gen = generation;
+        final MyLocationRequestHelper watch = locationHelper;
         handler.postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (gen != generation || locationHelper == null) {
+                if (gen != generation || locationHelper != watch) {
                     return;
                 }
                 Location loc = locationHelper.getLocation();
@@ -654,9 +660,9 @@ public class NearbyStopFragment extends Fragment {
                     startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)));
             return;
         }
-        setMyLocationBusy(true);
         Toast.makeText(requireContext(), "Определяем местоположение…", Toast.LENGTH_SHORT).show();
         startLocationWatch(true);
+        setMyLocationBusy(true); // after the start: startLocationWatch stops any previous watch and clears busy
     }
 
     private void setMyLocationBusy(boolean busy) {
@@ -736,6 +742,7 @@ public class NearbyStopFragment extends Fragment {
     }
 
     private void stopLocationWatch() {
+        setMyLocationBusy(false); // no watch, no busy button: also when start() or an automatic search ends it
         if (locationHelper != null) {
             if (mapView != null) {
                 getViewLifecycleOwner().getLifecycle().removeObserver(locationHelper);
@@ -817,6 +824,7 @@ public class NearbyStopFragment extends Fragment {
         selectedStop = stop;
         selectedDistance = distanceMeters;
         routes = Collections.emptyList();
+        overviewParts = Collections.emptyList();
         colorIndex.clear();
         highlight.clear();
         titleView.setText(data.getStopName(stop.getId()));
@@ -856,7 +864,18 @@ public class NearbyStopFragment extends Fragment {
         executor.execute(() -> {
             try {
                 src.loadRoutesForStop(stop.getId());
-                post(gen, () -> onRoutesLoaded(stop));
+                List<RouteAtStop> loadedRoutes = RoutesAtStopSelector.select(
+                        stop.getId(), src.getRouteIdsAtStop(stop.getId()), src.getRoutes());
+                List<RouteLine> visibleGeometry = new ArrayList<>();
+                for (RouteAtStop route : loadedRoutes) {
+                    for (RouteLine line : src.getLines(route.getRouteId())) {
+                        if (route.shows(line)) {
+                            visibleGeometry.add(line);
+                        }
+                    }
+                }
+                List<RouteCorridors.Part> parts = RouteCorridors.overview(visibleGeometry);
+                post(gen, () -> onRoutesLoaded(stop, loadedRoutes, parts));
             } catch (Exception e) {
                 Log.e(TAG, "routes of stop " + stop.getId() + " not loaded", e);
                 final boolean login = e instanceof AppDataSource.Unavailable && ((AppDataSource.Unavailable) e).loginRequired;
@@ -873,12 +892,13 @@ public class NearbyStopFragment extends Fragment {
         return same && !pickMode;
     }
 
-    private void onRoutesLoaded(StopPoint stop) {
+    private void onRoutesLoaded(StopPoint stop, List<RouteAtStop> loadedRoutes, List<RouteCorridors.Part> parts) {
         if (!isStillSelected(stop)) {
             return;
         }
         statusBar.setVisibility(View.GONE);
-        routes = RoutesAtStopSelector.select(stop.getId(), data.getRouteIdsAtStop(stop.getId()), data.getRoutes());
+        routes = loadedRoutes;
+        overviewParts = parts;
         List<Long> ids = new ArrayList<>();
         colorIndex.clear();
         for (RouteAtStop r : routes) {
@@ -1145,7 +1165,6 @@ public class NearbyStopFragment extends Fragment {
         map.addMarker(new MarkerOptions().position(new LatLng(selectedStop.getLat(), selectedStop.getLng()))
                 .title(data.getStopName(selectedStop.getId())).zIndex(6f));
         Map<Integer, BitmapDescriptor> arrowIcons = new HashMap<>();
-        List<RouteLine> visibleGeometry = new ArrayList<>();
         for (RouteAtStop r : routes) {
             long id = r.getRouteId();
             int color = colorOf(id);
@@ -1153,8 +1172,7 @@ public class NearbyStopFragment extends Fragment {
             List<Marker> ms = new ArrayList<>();
             List<RouteLine> used = new ArrayList<>();
             for (RouteLine line : data.getLines(id)) {
-                boolean servesStop = !r.isDirectionKnown() || r.getDirectionIndexes().contains(line.getDirectionIndex());
-                if (!servesStop || !line.isDrawable()) {
+                if (!r.shows(line)) {
                     continue;
                 }
                 // Full paths are used only when a route is selected.
@@ -1175,7 +1193,6 @@ public class NearbyStopFragment extends Fragment {
                         .icon(icon).anchor(0.5f, 0.5f).flat(true)
                         .rotation((float) line.finalBearing())));
                 used.add(line);
-                visibleGeometry.add(line);
             }
             polylines.put(id, pl);
             arrows.put(id, ms);
@@ -1184,7 +1201,7 @@ public class NearbyStopFragment extends Fragment {
 
         // Detect shared geometry, not just intersecting streets. Overview draws one
         // purple path per corridor, while selecting a route restores its full geometry.
-        for (RouteCorridors.Part part : RouteCorridors.overview(visibleGeometry)) {
+        for (RouteCorridors.Part part : overviewParts) {
             int colour = part.isShared() ? SHARED_CORRIDOR_COLOR : colorOf(part.getRouteId());
             PolylineOptions po = new PolylineOptions().color(colour).width(routeLineWidth()).geodesic(false)
                     .zIndex(part.isShared() ? 2f : 1f).visible(!highlight.hasSelection());
@@ -1275,6 +1292,8 @@ public class NearbyStopFragment extends Fragment {
 
     private void stopVehiclePolling() {
         vehiclePolling = false;
+        vehicleRequestGeneration++;
+        vehicleRequestInFlight = false;
         handler.removeCallbacks(vehicleTick);
     }
 
@@ -1290,18 +1309,19 @@ public class NearbyStopFragment extends Fragment {
     };
 
     private void fetchVehicles() {
-        if (vehicleRequestInFlight || selectedStop == null || executor == null) {
+        if (vehicleRequestInFlight || selectedStop == null || vehicleExecutor == null) {
             return;
         }
         vehicleRequestInFlight = true;
         final int gen = generation;
         final long stopId = selectedStop.getId();
+        final int requestGeneration = vehicleRequestGeneration;
         final NearbyDataSource src = data;
         final List<Long> ids = new ArrayList<>();
         for (RouteAtStop r : routes) {
             ids.add(r.getRouteId());
         }
-        executor.execute(() -> {
+        vehicleExecutor.execute(() -> {
             List<VehiclePosition> all = null;
             try {
                 all = src.loadVehicles(ids);
@@ -1310,6 +1330,9 @@ public class NearbyStopFragment extends Fragment {
             }
             final List<VehiclePosition> result = all;
             handler.post(() -> {
+                if (requestGeneration != vehicleRequestGeneration) {
+                    return;
+                }
                 vehicleRequestInFlight = false;
                 if (gen != generation || mapView == null || !vehiclePolling
                         || selectedStop == null || selectedStop.getId() != stopId) {
@@ -1577,7 +1600,7 @@ public class NearbyStopFragment extends Fragment {
         if (selectedStop != null) {
             drawStop();
             refreshHighlight(false);
-            if (routesLoadSkipped && data != null && data.hasRoutes()) {
+            if ((routesLoadSkipped || routes.isEmpty()) && data != null && data.hasRoutes()) {
                 routesLoadSkipped = false;
                 updateSubtitle("загружаем маршруты…");
                 loadRoutes(selectedStop);
@@ -1632,7 +1655,7 @@ public class NearbyStopFragment extends Fragment {
         final int gen = generation;
         final List<StopPoint> stops = allStops;
         final NearbyDataSource src = data;
-        executor.execute(() -> {
+        pickExecutor.execute(() -> {
             try {
                 List<StopMatch> near = NearestStopFinder.findNearby(stops, c.latitude, c.longitude, radius, PICK_LIMIT);
                 List<StopPoint> forNames = new ArrayList<>();
@@ -1949,6 +1972,14 @@ public class NearbyStopFragment extends Fragment {
         if (executor != null) {
             executor.shutdownNow();
             executor = null;
+        }
+        if (vehicleExecutor != null) {
+            vehicleExecutor.shutdownNow();
+            vehicleExecutor = null;
+        }
+        if (pickExecutor != null) {
+            pickExecutor.shutdownNow();
+            pickExecutor = null;
         }
         if (mapView != null) {
             mapView.onDestroy();
